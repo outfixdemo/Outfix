@@ -5028,10 +5028,9 @@ function WornHistoryCalendar({outfits,items,showToast,logWear}){
 }
 
 // ── CALENDAR ──────────────────────────────────────────────────────────────────
-function CalendarTab({outfits,items,showToast,logWear}){
+function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
   const [sel,setSel]=useState(null);
   const [view,setView]=useState("events");
-  const [events,setEvents]=useState(calendarEvents);
   const [showAddEvent,setShowAddEvent]=useState(false);
   const [newLabel,setNewLabel]=useState("");
   const [newDate,setNewDate]=useState("");
@@ -6339,7 +6338,7 @@ function SettingsTab({currentPlan,setShowPricing,showToast,items,userName="",use
 // ── CAPSULE COLLECTIONS ────────────────────────────────────────────────────────
 
 // ── VAULT ────────────────────────────────────────────────────────────────────
-function VaultTab({items,outfits,showToast,wishlist,setWishlist,currentPlan,setShowPricing,logWear}){
+function VaultTab({items,outfits,showToast,wishlist,setWishlist,currentPlan,setShowPricing,logWear,events,setEvents}){
   const [section,setSection]=useState("discover"); // discover | planner | stats
   const isPro = currentPlan!=="free";
 
@@ -6420,7 +6419,7 @@ function VaultTab({items,outfits,showToast,wishlist,setWishlist,currentPlan,setS
       )}
       {section==="planner"&&(
         <Gate feature="Occasion Planner">
-          <CalendarTab outfits={outfits} items={items} showToast={showToast} logWear={logWear}/>
+          <CalendarTab outfits={outfits} items={items} showToast={showToast} logWear={logWear} events={events} setEvents={setEvents}/>
         </Gate>
       )}
       {section==="stats"&&(
@@ -6443,18 +6442,13 @@ export default function App(){
   const [session,setSession] = useState(null);
   const [authLoading,setAuthLoading] = useState(true);
 
-  // Restore session on mount
+  // Restore session on mount — trust saved token, don't re-verify
   useEffect(()=>{
     const saved = sb.loadSession();
     if(saved?.access_token){
-      sb.getUser(saved.access_token).then(user=>{
-        if(user?.id){ setSession(saved); }
-        else { sb.clearSession(); }
-        setAuthLoading(false);
-      }).catch(()=>{ sb.clearSession(); setAuthLoading(false); });
-    } else {
-      setAuthLoading(false);
+      setSession(saved);
     }
+    setAuthLoading(false);
   },[]);
 
   const handleAuth = (sess) => setSession(sess);
@@ -6477,6 +6471,7 @@ export default function App(){
 
   // ── New feature state ──
   const [showPushNotifs,setShowPushNotifs] = useState(false);
+  const [appEvents,setAppEvents] = useState(calendarEvents);
 
 
   // ── Helpers ──
@@ -6597,7 +6592,7 @@ export default function App(){
             </button>
           </div>
         )}
-        {tab==="vault"     && <VaultTab items={items} outfits={outfits} showToast={showToast} wishlist={wishlist} setWishlist={setWishlist} currentPlan={currentPlan} setShowPricing={setShowPricing} logWear={logWear} />}
+        {tab==="vault"     && <VaultTab items={items} outfits={outfits} showToast={showToast} wishlist={wishlist} setWishlist={setWishlist} currentPlan={currentPlan} setShowPricing={setShowPricing} logWear={logWear} events={appEvents} setEvents={setAppEvents}/>}
       </div>
 
       {/* ── BOTTOM NAV ── */}
