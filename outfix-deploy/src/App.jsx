@@ -3834,13 +3834,9 @@ function ReverseSearchModal({onClose, onAddToWishlist}){
 
 
 async function callClaude(prompt, systemPrompt) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/claude", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1000,
@@ -3853,13 +3849,9 @@ async function callClaude(prompt, systemPrompt) {
 }
 
 async function callClaudeVision(base64Image, mediaType, prompt) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/claude", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1000,
@@ -4384,9 +4376,9 @@ function parseTripDate(str, fallbackYear=2026){
 async function fetchTripWeather(destination, startDate, endDate){
   const prompt = `Give a day-by-day weather forecast for ${destination} from ${startDate} to ${endDate}. Use your knowledge of typical seasonal climate for this location and time of year. Use Fahrenheit for temperatures. Respond ONLY with a JSON object, no markdown:
 {"city":"${destination.split(",")[0].trim()}","days":[{"date":"YYYY-MM-DD","condition":"Partly Cloudy","tempMax":72,"tempMin":57},...]}`; 
-  const res = await fetch("https://api.anthropic.com/v1/messages",{
+  const res = await fetch("/api/claude",{
     method:"POST",
-    headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+    headers:{"Content-Type":"application/json"},
     body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:"You are a weather assistant. Always respond with valid JSON only, no markdown, no explanation.",messages:[{role:"user",content:prompt}]})
   });
   const data = await res.json();
