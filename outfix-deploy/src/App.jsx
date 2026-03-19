@@ -242,38 +242,38 @@ const _abs0 = {position:"absolute",inset:0};
 
 // ── DATA ────────────────────────────────────────────────────────────────────
 const initItems = [
-  { id:1,  name:"Silk Ivory Blouse",    brand:"Aritzia",         category:"Tops",        color:"#F5F0E8", price:180,  tags:["elegant","office"],    forSale:false, emoji:"👚", wearCount:12, lastWorn:"2 days ago",  purchaseDate:"Jan 2023", condition:"Excellent", sourceImage:null},
-  { id:2,  name:"Wide Leg Trousers",    brand:"COS",             category:"Bottoms",     color:"#2C3E50", price:120,  tags:["minimal","office"],    forSale:false, emoji:"👖", wearCount:18, lastWorn:"Yesterday",   purchaseDate:"Mar 2023", condition:"Good",     sourceImage:null},
-  { id:3,  name:"Cashmere Crewneck",    brand:"Everlane",        category:"Tops",        color:"#C4A882", price:150,  tags:["cozy","casual"],       forSale:false, emoji:"🧶", wearCount:9,  lastWorn:"1 week ago",  purchaseDate:"Oct 2022", condition:"Good",     sourceImage:null},
-  { id:4,  name:"Mini Leather Skirt",   brand:"& Other Stories", category:"Bottoms",     color:"#1A1A1A", price:95,   tags:["edgy","night-out"],    forSale:true,  emoji:"🩱", wearCount:3,  lastWorn:"3 months ago",purchaseDate:"Jun 2023", condition:"Like New", sourceImage:null},
-  { id:5,  name:"Trench Coat",          brand:"Burberry",        category:"Outerwear",   color:"#C8A96E", price:1200, tags:["classic","rainy"],     forSale:false, emoji:"🧥", wearCount:22, lastWorn:"4 days ago",  purchaseDate:"Feb 2021", condition:"Excellent",sourceImage:null},
-  { id:6,  name:"White Sneakers",       brand:"Common Projects", category:"Shoes",       color:"#F5F5F0", price:420,  tags:["minimal","casual"],    forSale:false, emoji:"👟", wearCount:41, lastWorn:"Today",       purchaseDate:"Apr 2022", condition:"Good",     sourceImage:null},
-  { id:7,  name:"Slingback Heels",      brand:"Mango",           category:"Shoes",       color:"#1A1A1A", price:89,   tags:["elegant","office"],    forSale:true,  emoji:"👠", wearCount:5,  lastWorn:"2 weeks ago", purchaseDate:"Sep 2023", condition:"Like New", sourceImage:null},
-  { id:8,  name:"Gold Hoop Earrings",   brand:"Mejuri",          category:"Accessories", color:"#D4AF37", price:68,   tags:["everyday","gold"],     forSale:false, emoji:"💛", wearCount:55, lastWorn:"Today",       purchaseDate:"Dec 2021", condition:"Excellent",sourceImage:null},
-  { id:9,  name:"Linen Midi Dress",     brand:"Faithfull",       category:"Dresses",     color:"#E8DDD0", price:220,  tags:["summer","vacation"],   forSale:false, emoji:"👗", wearCount:7,  lastWorn:"1 month ago", purchaseDate:"May 2023", condition:"Excellent",sourceImage:null},
-  { id:10, name:"Merino Cardigan",      brand:"Uniqlo",          category:"Tops",        color:"#B0C4DE", price:59,   tags:["cozy","layering"],     forSale:false, emoji:"🧣", wearCount:2,  lastWorn:"Never",       purchaseDate:"Nov 2023", condition:"Like New", sourceImage:null},
+  { id:1,  name:"Silk Ivory Blouse",    brand:"Aritzia",         category:"Tops",        color:"#F5F0E8", price:180,  tags:["elegant","office","demo"],    forSale:false, emoji:"👚", wearCount:12, lastWorn:"2 days ago",  purchaseDate:"Jan 2023", condition:"Excellent", sourceImage:null},
+  { id:2,  name:"Wide Leg Trousers",    brand:"COS",             category:"Bottoms",     color:"#2C3E50", price:120,  tags:["minimal","office","demo"],    forSale:false, emoji:"👖", wearCount:18, lastWorn:"Yesterday",   purchaseDate:"Mar 2023", condition:"Good",     sourceImage:null},
+  { id:3,  name:"Cashmere Crewneck",    brand:"Everlane",        category:"Tops",        color:"#C4A882", price:150,  tags:["cozy","casual","demo"],       forSale:false, emoji:"🧶", wearCount:9,  lastWorn:"1 week ago",  purchaseDate:"Oct 2022", condition:"Good",     sourceImage:null},
+  { id:4,  name:"Mini Leather Skirt",   brand:"& Other Stories", category:"Bottoms",     color:"#1A1A1A", price:95,   tags:["edgy","night-out","demo"],    forSale:true,  emoji:"🩱", wearCount:3,  lastWorn:"3 months ago",purchaseDate:"Jun 2023", condition:"Like New", sourceImage:null},
+  { id:5,  name:"Trench Coat",          brand:"Burberry",        category:"Outerwear",   color:"#C8A96E", price:1200, tags:["classic","rainy","demo"],     forSale:false, emoji:"🧥", wearCount:22, lastWorn:"4 days ago",  purchaseDate:"Feb 2021", condition:"Excellent",sourceImage:null},
+  { id:6,  name:"White Sneakers",       brand:"Common Projects", category:"Shoes",       color:"#F5F5F0", price:420,  tags:["minimal","casual","demo"],    forSale:false, emoji:"👟", wearCount:41, lastWorn:"Today",       purchaseDate:"Apr 2022", condition:"Good",     sourceImage:null},
+  { id:7,  name:"Slingback Heels",      brand:"Mango",           category:"Shoes",       color:"#1A1A1A", price:89,   tags:["elegant","office","demo"],    forSale:true,  emoji:"👠", wearCount:5,  lastWorn:"2 weeks ago", purchaseDate:"Sep 2023", condition:"Like New", sourceImage:null},
+  { id:8,  name:"Gold Hoop Earrings",   brand:"Mejuri",          category:"Accessories", color:"#D4AF37", price:68,   tags:["everyday","gold","demo"],     forSale:false, emoji:"💛", wearCount:55, lastWorn:"Today",       purchaseDate:"Dec 2021", condition:"Excellent",sourceImage:null},
+  { id:9,  name:"Linen Midi Dress",     brand:"Faithfull",       category:"Dresses",     color:"#E8DDD0", price:220,  tags:["summer","vacation","demo"],   forSale:false, emoji:"👗", wearCount:7,  lastWorn:"1 month ago", purchaseDate:"May 2023", condition:"Excellent",sourceImage:null},
+  { id:10, name:"Merino Cardigan",      brand:"Uniqlo",          category:"Tops",        color:"#B0C4DE", price:59,   tags:["cozy","layering","demo"],     forSale:false, emoji:"🧣", wearCount:2,  lastWorn:"Never",       purchaseDate:"Nov 2023", condition:"Like New", sourceImage:null},
   // ── Tops ──
-  { id:11, name:"Fitted Turtleneck",    brand:"Toteme",          category:"Tops",        color:"#F0EBE3", price:195,  tags:["minimal","elegant"],   forSale:false, emoji:"👕", wearCount:6,  lastWorn:"5 days ago",  purchaseDate:"Sep 2023", condition:"Excellent",sourceImage:null},
-  { id:12, name:"Striped Linen Shirt",  brand:"Sézane",          category:"Tops",        color:"#1A2A3A", price:110,  tags:["casual","summer"],     forSale:false, emoji:"👔", wearCount:14, lastWorn:"Last week",   purchaseDate:"Apr 2023", condition:"Good",     sourceImage:null},
+  { id:11, name:"Fitted Turtleneck",    brand:"Toteme",          category:"Tops",        color:"#F0EBE3", price:195,  tags:["minimal","elegant","demo"],   forSale:false, emoji:"👕", wearCount:6,  lastWorn:"5 days ago",  purchaseDate:"Sep 2023", condition:"Excellent",sourceImage:null},
+  { id:12, name:"Striped Linen Shirt",  brand:"Sézane",          category:"Tops",        color:"#1A2A3A", price:110,  tags:["casual","summer","demo"],     forSale:false, emoji:"👔", wearCount:14, lastWorn:"Last week",   purchaseDate:"Apr 2023", condition:"Good",     sourceImage:null},
   // ── Bottoms ──
-  { id:13, name:"Straight Leg Jeans",   brand:"Agolde",          category:"Bottoms",     color:"#4A6080", price:198,  tags:["casual","weekend"],    forSale:false, emoji:"👖", wearCount:24, lastWorn:"2 days ago",  purchaseDate:"Jan 2023", condition:"Good",     sourceImage:null},
-  { id:14, name:"Tailored Trousers",    brand:"COS",             category:"Bottoms",     color:"#3A3028", price:130,  tags:["office","minimal"],    forSale:false, emoji:"👖", wearCount:11, lastWorn:"3 days ago",  purchaseDate:"Aug 2023", condition:"Excellent",sourceImage:null},
-  { id:15, name:"Pleated Midi Skirt",   brand:"& Other Stories", category:"Bottoms",     color:"#D4C4A8", price:85,   tags:["feminine","elegant"],  forSale:false, emoji:"🩳", wearCount:4,  lastWorn:"2 weeks ago", purchaseDate:"Mar 2024", condition:"Like New", sourceImage:null},
+  { id:13, name:"Straight Leg Jeans",   brand:"Agolde",          category:"Bottoms",     color:"#4A6080", price:198,  tags:["casual","weekend","demo"],    forSale:false, emoji:"👖", wearCount:24, lastWorn:"2 days ago",  purchaseDate:"Jan 2023", condition:"Good",     sourceImage:null},
+  { id:14, name:"Tailored Trousers",    brand:"COS",             category:"Bottoms",     color:"#3A3028", price:130,  tags:["office","minimal","demo"],    forSale:false, emoji:"👖", wearCount:11, lastWorn:"3 days ago",  purchaseDate:"Aug 2023", condition:"Excellent",sourceImage:null},
+  { id:15, name:"Pleated Midi Skirt",   brand:"& Other Stories", category:"Bottoms",     color:"#D4C4A8", price:85,   tags:["feminine","elegant","demo"],  forSale:false, emoji:"🩳", wearCount:4,  lastWorn:"2 weeks ago", purchaseDate:"Mar 2024", condition:"Like New", sourceImage:null},
   // ── Dresses ──
-  { id:16, name:"Wrap Silk Dress",      brand:"Vince",           category:"Dresses",     color:"#C4A882", price:380,  tags:["evening","elegant"],   forSale:false, emoji:"👗", wearCount:5,  lastWorn:"Last month",  purchaseDate:"Nov 2022", condition:"Excellent",sourceImage:null},
-  { id:17, name:"Knit Mini Dress",      brand:"Reformation",     category:"Dresses",     color:"#1A1A1A", price:248,  tags:["night-out","edgy"],    forSale:false, emoji:"🩱", wearCount:3,  lastWorn:"6 weeks ago", purchaseDate:"Oct 2023", condition:"Like New", sourceImage:null},
-  { id:18, name:"Floral Midi Dress",    brand:"Ulla Johnson",    category:"Dresses",     color:"#D0B8C0", price:395,  tags:["romantic","spring"],   forSale:false, emoji:"👗", wearCount:2,  lastWorn:"Never",       purchaseDate:"Feb 2024", condition:"Like New", sourceImage:null},
+  { id:16, name:"Wrap Silk Dress",      brand:"Vince",           category:"Dresses",     color:"#C4A882", price:380,  tags:["evening","elegant","demo"],   forSale:false, emoji:"👗", wearCount:5,  lastWorn:"Last month",  purchaseDate:"Nov 2022", condition:"Excellent",sourceImage:null},
+  { id:17, name:"Knit Mini Dress",      brand:"Reformation",     category:"Dresses",     color:"#1A1A1A", price:248,  tags:["night-out","edgy","demo"],    forSale:false, emoji:"🩱", wearCount:3,  lastWorn:"6 weeks ago", purchaseDate:"Oct 2023", condition:"Like New", sourceImage:null},
+  { id:18, name:"Floral Midi Dress",    brand:"Ulla Johnson",    category:"Dresses",     color:"#D0B8C0", price:395,  tags:["romantic","spring","demo"],   forSale:false, emoji:"👗", wearCount:2,  lastWorn:"Never",       purchaseDate:"Feb 2024", condition:"Like New", sourceImage:null},
   // ── Outerwear ──
-  { id:19, name:"Oversized Blazer",     brand:"Zara",            category:"Outerwear",   color:"#E8E0D0", price:120,  tags:["office","smart"],      forSale:false, emoji:"🥼", wearCount:17, lastWorn:"Yesterday",   purchaseDate:"Oct 2022", condition:"Good",     sourceImage:null},
-  { id:20, name:"Wool Coat",            brand:"Arket",           category:"Outerwear",   color:"#8A7060", price:350,  tags:["winter","classic"],    forSale:false, emoji:"🧥", wearCount:12, lastWorn:"Last week",   purchaseDate:"Dec 2021", condition:"Good",     sourceImage:null},
-  { id:21, name:"Denim Jacket",         brand:"Levi's",          category:"Outerwear",   color:"#4A6080", price:98,   tags:["casual","weekend"],    forSale:false, emoji:"🧥", wearCount:8,  lastWorn:"4 days ago",  purchaseDate:"May 2022", condition:"Good",     sourceImage:null},
+  { id:19, name:"Oversized Blazer",     brand:"Zara",            category:"Outerwear",   color:"#E8E0D0", price:120,  tags:["office","smart","demo"],      forSale:false, emoji:"🥼", wearCount:17, lastWorn:"Yesterday",   purchaseDate:"Oct 2022", condition:"Good",     sourceImage:null},
+  { id:20, name:"Wool Coat",            brand:"Arket",           category:"Outerwear",   color:"#8A7060", price:350,  tags:["winter","classic","demo"],    forSale:false, emoji:"🧥", wearCount:12, lastWorn:"Last week",   purchaseDate:"Dec 2021", condition:"Good",     sourceImage:null},
+  { id:21, name:"Denim Jacket",         brand:"Levi's",          category:"Outerwear",   color:"#4A6080", price:98,   tags:["casual","weekend","demo"],    forSale:false, emoji:"🧥", wearCount:8,  lastWorn:"4 days ago",  purchaseDate:"May 2022", condition:"Good",     sourceImage:null},
   // ── Shoes ──
-  { id:22, name:"Ankle Boots",          brand:"Vagabond",        category:"Shoes",       color:"#2A1A0A", price:180,  tags:["casual","versatile"],  forSale:false, emoji:"👢", wearCount:19, lastWorn:"3 days ago",  purchaseDate:"Sep 2021", condition:"Good",     sourceImage:null},
-  { id:23, name:"Loafers",              brand:"Gucci",           category:"Shoes",       color:"#1A1A1A", price:750,  tags:["smart","office"],      forSale:false, emoji:"👞", wearCount:10, lastWorn:"Last week",   purchaseDate:"Mar 2022", condition:"Excellent",sourceImage:null},
-  { id:24, name:"Strappy Sandals",      brand:"Mango",           category:"Shoes",       color:"#C8A96E", price:65,   tags:["summer","casual"],     forSale:false, emoji:"👡", wearCount:6,  lastWorn:"Last month",  purchaseDate:"Apr 2023", condition:"Good",     sourceImage:null},
+  { id:22, name:"Ankle Boots",          brand:"Vagabond",        category:"Shoes",       color:"#2A1A0A", price:180,  tags:["casual","versatile","demo"],  forSale:false, emoji:"👢", wearCount:19, lastWorn:"3 days ago",  purchaseDate:"Sep 2021", condition:"Good",     sourceImage:null},
+  { id:23, name:"Loafers",              brand:"Gucci",           category:"Shoes",       color:"#1A1A1A", price:750,  tags:["smart","office","demo"],      forSale:false, emoji:"👞", wearCount:10, lastWorn:"Last week",   purchaseDate:"Mar 2022", condition:"Excellent",sourceImage:null},
+  { id:24, name:"Strappy Sandals",      brand:"Mango",           category:"Shoes",       color:"#C8A96E", price:65,   tags:["summer","casual","demo"],     forSale:false, emoji:"👡", wearCount:6,  lastWorn:"Last month",  purchaseDate:"Apr 2023", condition:"Good",     sourceImage:null},
   // ── Accessories ──
-  { id:25, name:"Silk Neck Scarf",      brand:"Hermès",          category:"Accessories", color:"#C04030", price:450,  tags:["elegant","colorful"],  forSale:false, emoji:"🧣", wearCount:8,  lastWorn:"Last week",   purchaseDate:"Jun 2021", condition:"Excellent",sourceImage:null},
-  { id:26, name:"Leather Belt",         brand:"A.P.C.",          category:"Accessories", color:"#2A1A0A", price:120,  tags:["minimal","everyday"],  forSale:false, emoji:"👜", wearCount:30, lastWorn:"Yesterday",   purchaseDate:"Jan 2022", condition:"Good",     sourceImage:null},
+  { id:25, name:"Silk Neck Scarf",      brand:"Hermès",          category:"Accessories", color:"#C04030", price:450,  tags:["elegant","colorful","demo"],  forSale:false, emoji:"🧣", wearCount:8,  lastWorn:"Last week",   purchaseDate:"Jun 2021", condition:"Excellent",sourceImage:null},
+  { id:26, name:"Leather Belt",         brand:"A.P.C.",          category:"Accessories", color:"#2A1A0A", price:120,  tags:["minimal","everyday","demo"],  forSale:false, emoji:"👜", wearCount:30, lastWorn:"Yesterday",   purchaseDate:"Jan 2022", condition:"Good",     sourceImage:null},
 ];
 
 const initOutfits = [
@@ -1434,15 +1434,13 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
           }
         }catch(err){
           setScanning(false);
-          setScanned({name:"Striped Linen Shirt",brand:"Sandro",category:"Tops",color:"#E8E0D0",price:195,tags:["casual","summer"],emoji:"👔",wearCount:0,lastWorn:"Never",purchaseDate:"Mar 2024",condition:"Like New",forSale:false});
+          showToast("Couldn't recognize item — please try again or describe it manually ❆");
         }
       };
       reader.readAsDataURL(file);
     } else {
-      setTimeout(()=>{
-        setScanning(false);
-        setScanned({name:"Striped Linen Shirt",brand:"Sandro",category:"Tops",color:"#E8E0D0",price:195,tags:["casual","summer"],emoji:"👔",wearCount:0,lastWorn:"Never",purchaseDate:"Mar 2024",condition:"Like New",forSale:false});
-      },2200);
+      setScanning(false);
+      showToast("Please upload an image file ❆");
     }
   };
 
@@ -1956,7 +1954,7 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
 }
 
 // ── ITEM DETAIL ───────────────────────────────────────────────────────────────
-function ItemDetail({item,onClose,onAddToOutfit,showToast}){
+function ItemDetail({item,onClose,onAddToOutfit,showToast,onRemove}){
   const [activePair,setActivePair]=useState(null);
   if(!item) return null;
 
@@ -2031,9 +2029,28 @@ function ItemDetail({item,onClose,onAddToOutfit,showToast}){
           )}
         </div>
 
-        <div style={{display:"flex",gap:10}}>
-          <Btn onClick={()=>{showToast("Listed for sale \u2746");onClose();}} outline>LIST FOR SALE</Btn>
-          <Btn onClick={()=>{onAddToOutfit(item.id);onClose();}} full>ADD TO OUTFIT</Btn>
+        <div style={{display:"flex",gap:10,flexDirection:"column"}}>
+          {item.tags?.includes("demo") && (
+            <div style={{background:"#1A1A0A",border:`1px solid ${G}33`,borderRadius:10,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:12}}>ℹ️</span>
+              <span style={ss(9,400,DM,{lineHeight:1.4})}>This is a demo item. Add your own items via Photo Upload or URL to build your real closet.</span>
+            </div>
+          )}
+          <div style={{display:"flex",gap:10}}>
+            <Btn onClick={()=>{showToast("Listed for sale \u2746");onClose();}} outline>LIST FOR SALE</Btn>
+            <Btn onClick={()=>{onAddToOutfit(item.id);onClose();}} full>ADD TO OUTFIT</Btn>
+          </div>
+          {onRemove && (
+            <button onClick={()=>{
+              if(window.confirm(`Remove "${item.name}" from your closet?`)){
+                onRemove(item.id);
+                onClose();
+                showToast(`${item.name} removed \u2746`);
+              }
+            }} style={{width:"100%",padding:"11px",borderRadius:12,background:"#1A0A0A",border:"1px solid #3A1A1A",...ss(9,600,"#A86060",{letterSpacing:1}),cursor:_p}}>
+              REMOVE FROM CLOSET
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -6698,6 +6715,7 @@ export default function App(){
         onClose={()=>setSelectedItem(null)}
         onAddToOutfit={()=>{setTab("outfits");showToast("Opening outfit builder \u2746");}}
         showToast={showToast}
+        onRemove={(id)=>setItems(prev=>prev.filter(i=>i.id!==id))}
       />
 
       {showPricing && (
