@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 
 // ── SUPABASE CLIENT ───────────────────────────────────────────────────────────
 const SB_URL = "https://asvrbeonxmskllkshwbl.supabase.co";
-const SB_KEY = "sb_publishable_LzSpAwj1h3hCqahFPlry_w_RCPJyP_q";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFzdnJiZW9ueG1za2xsa3Nod2JsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4NjIyOTcsImV4cCI6MjA4OTQzODI5N30.XKcXvNydVhHcHTjCA7xJ2z7Ey82UA7ojmh81GdTyrVA";
 
 const sbHeaders = (token) => ({
   "Content-Type": "application/json",
@@ -26,7 +26,11 @@ const sb = {
       headers: sbHeaders(),
       body: JSON.stringify({ email, password }),
     });
-    return r.json();
+    const data = await r.json();
+    console.log("Supabase signIn status:", r.status, "response:", JSON.stringify(data).slice(0,200));
+    // Attach HTTP status so caller can check it
+    data.__status = r.status;
+    return data;
   },
   async signOut(token) {
     await fetch(`${SB_URL}/auth/v1/logout`, {
@@ -93,22 +97,59 @@ function AuthScreen({ onAuth }) {
   const [error, setError] = useState("");
 
   const submit = async () => {
+    console.log("Auth submit — mode:", mode, "email:", email.trim());
     if (!email.trim() || !password.trim()) { setError("Please fill in all fields"); return; }
     if (mode === "signup" && !name.trim()) { setError("Please enter your name"); return; }
     setLoading(true); setError("");
     try {
-      let res;
       if (mode === "signup") {
-        res = await sb.signUp(email.trim(), password, name.trim());
-        if (res.error) { setError(res.error.message); setLoading(false); return; }
-        // After signup, sign in to get session
-        res = await sb.signIn(email.trim(), password);
+        // Sign up new user
+        const res = await sb.signUp(email.trim(), password, name.trim());
+        const err = res.error || res.error_description;
+        if (err) { setError(typeof err === "string" ? err : err.message || "Sign up failed"); setLoading(false); return; }
+        if (!res.access_token) {
+          // Email confirmation required — tell the user
+          setError(""); 
+          setLoading(false);
+          alert("Account created! Please check your email and click the confirmation link before signing in.");
+          setMode("signin");
+          return;
+        }
+        sb.saveSession(res);
+        onAuth(res);
       } else {
-        res = await sb.signIn(email.trim(), password);
+        // Sign in existing user only
+        const res = await sb.signIn(email.trim(), password);
+        console.log("signIn full response:", JSON.stringify(res));
+        
+        // HARD BLOCK — only a real JWT token with correct format opens the app
+        const token = res?.access_token;
+        const isRealToken = typeof token === "string" && token.startsWith("eyJ") && token.length > 100;
+        
+        if (!isRealToken) {
+          setError("Incorrect email or password. Please try again.");
+          setLoading(false);
+          return;
+        }
+        
+        // Double-check: decode token payload and verify it has a real user id
+        try {
+          const payload = JSON.parse(atob(token.split(".")[1]));
+          console.log("Token payload:", JSON.stringify(payload));
+          if (!payload?.sub || payload.sub.length < 10) {
+            setError("Authentication failed. Please try again.");
+            setLoading(false);
+            return;
+          }
+        } catch(decodeErr) {
+          setError("Authentication failed. Please try again.");
+          setLoading(false);
+          return;
+        }
+        
+        sb.saveSession(res);
+        onAuth(res);
       }
-      if (res.error) { setError(res.error.message); setLoading(false); return; }
-      sb.saveSession(res);
-      onAuth(res);
     } catch(e) {
       setError("Connection error — please try again");
     }
@@ -6442,16 +6483,25 @@ export default function App(){
   const [session,setSession] = useState(null);
   const [authLoading,setAuthLoading] = useState(true);
 
-  // Restore session on mount — trust saved token, don't re-verify
+  // Restore session on mount — only if token looks like a real JWT
   useEffect(()=>{
     const saved = sb.loadSession();
-    if(saved?.access_token){
+    if(saved?.access_token && typeof saved.access_token === "string" && saved.access_token.startsWith("eyJ")){
       setSession(saved);
+    } else {
+      sb.clearSession(); // Wipe any malformed saved session
     }
     setAuthLoading(false);
   },[]);
 
-  const handleAuth = (sess) => setSession(sess);
+  const handleAuth = (sess) => {
+    // Hard gate — only allow entry if there is a real JWT access_token
+    if (!sess?.access_token || typeof sess.access_token !== "string" || !sess.access_token.startsWith("eyJ")) {
+      console.warn("handleAuth blocked — no valid token:", sess);
+      return;
+    }
+    setSession(sess);
+  };
   const handleSignOut = async () => {
     if(session?.access_token) await sb.signOut(session.access_token);
     sb.clearSession();
