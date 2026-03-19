@@ -13,7 +13,10 @@ export default async function handler(req, res) {
     const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cseId}&q=${encodeURIComponent(query)}&searchType=image&num=1&imgSize=large&imgType=photo`;
     const response = await fetch(url);
     const data = await response.json();
-    const imageUrl = data.items?.[0]?.link || null;
+    const item = data.items?.[0];
+    // Use Google's own thumbnail (always loads, no hotlink issues)
+    // thumbnailLink is hosted by Google at encrypted-tbn0.gstatic.com
+    const imageUrl = item?.image?.thumbnailLink || item?.link || null;
     return res.status(200).json({ imageUrl });
   } catch (err) {
     return res.status(200).json({ imageUrl: null });
