@@ -1,112 +1,59 @@
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
+  if (req.method !== 'POST') return res.status(405).end();
   const { url } = req.body;
-  if (!url) return res.status(400).json({ error: 'No URL provided' });
+  if (!url) return res.status(400).json({ error: 'No URL' });
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    const response = await fetch(url, {
-      signal: controller.signal,
+    const r = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Cache-Control': 'no-cache',
       }
     });
+    const html = await r.text();
 
-    clearTimeout(timeout);
-    const html = await response.text();
-
-    // ── 1. JSON-LD structured data (most reliable) ──────────────────────────
-    let price = null;
-    let image = null;
-
-    const jsonLdBlocks = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
-    for (const block of jsonLdBlocks) {
+    // ── 1. JSON-LD structured data (most accurate) ──
+    const jsonLdMatch = html.match(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi) || [];
+    for (const block of jsonLdMatch) {
       try {
-        const raw = block[1].trim();
-        const data = JSON.parse(raw);
-        const nodes = Array.isArray(data) ? data : (data['@graph'] ? data['@graph'] : [data]);
-
-        for (const node of nodes) {
-          // Price
-          if (!price) {
-            const offers = node.offers || node.Offers;
-            if (offers) {
-              const offer = Array.isArray(offers) ? offers[0] : offers;
-              const p = offer?.price ?? offer?.lowPrice ?? offer?.priceSpecification?.price;
-              if (p) price = parseFloat(String(p).replace(/[^0-9.]/g, ''));
-            }
-          }
-          // Image
-          if (!image) {
-            const img = node.image;
-            if (typeof img === 'string' && img.startsWith('http')) image = img;
-            else if (Array.isArray(img) && img[0]) image = typeof img[0] === 'string' ? img[0] : img[0]?.url;
-            else if (img?.url) image = img.url;
-          }
+        const inner = block.replace(/<script[^>]*>/, '').replace(/<\/script>/, '');
+        const data = JSON.parse(inner);
+        const product = Array.isArray(data) ? data.find(d => d['@type'] === 'Product') : data['@type'] === 'Product' ? data : null;
+        if (product) {
+          const price = product.offers?.price || product.offers?.[0]?.price || null;
+          const image = Array.isArray(product.image) ? product.image[0] : product.image || null;
+          const name = product.name || null;
+          const brand = product.brand?.name || product.brand || null;
+          const description = product.description?.slice(0, 300) || null;
+          if (name || image || price) return res.json({ name, brand, price: price ? parseFloat(price) : null, image, description });
         }
       } catch (e) {}
-      if (price && image) break;
     }
 
-    // ── 2. Open Graph / meta tags ────────────────────────────────────────────
-    if (!image) {
-      const ogImg = html.match(/property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
-                 || html.match(/content=["']([^"']+)["'][^>]*property=["']og:image["']/i)
-                 || html.match(/name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
-      if (ogImg?.[1]) image = ogImg[1];
-    }
+    // ── 2. Open Graph meta tags ──
+    const ogTitle = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i)?.[1] || null;
+    const ogImage = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i)?.[1] || null;
+    const ogDesc = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]+)"/i)?.[1]?.slice(0,300) || null;
 
-    if (!price) {
-      const metaPrice = html.match(/property=["']product:price:amount["'][^>]*content=["']([^"']+)["']/i)
-                      || html.match(/content=["']([^"']+)["'][^>]*property=["']product:price:amount["']/i);
-      if (metaPrice?.[1]) price = parseFloat(metaPrice[1]);
-    }
+    // ── 3. Price patterns ──
+    const priceMatch = html.match(/["']price["']\s*:\s*["']?([\d.]+)["']?/) ||
+                       html.match(/itemprop="price"[^>]*content="([\d.]+)"/) ||
+                       html.match(/class="[^"]*price[^"]*"[^>]*>\s*\$?([\d,]+\.?\d*)/i);
+    const price = priceMatch ? parseFloat(priceMatch[1].replace(',','')) : null;
 
-    // ── 3. itemprop / schema fallbacks ───────────────────────────────────────
-    if (!price) {
-      const patterns = [
-        /itemprop=["']price["'][^>]*content=["']([^"']+)["']/i,
-        /class=["'][^"']*price[^"']*["'][^>]*>\s*[£$€¥]?\s*([\d,]+\.?\d*)/i,
-        /"price"\s*:\s*"?([\d.]+)"?/,
-        /data-price=["']([\d.]+)["']/i,
-      ];
-      for (const p of patterns) {
-        const m = html.match(p);
-        if (m?.[1]) { price = parseFloat(m[1].replace(/,/g, '')); break; }
-      }
-    }
+    // ── 4. Product name fallbacks ──
+    const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.split('|')[0]?.split('-')[0]?.trim() || null;
+    const h1Tag = html.match(/<h1[^>]*>([^<]+)<\/h1>/i)?.[1]?.trim() || null;
 
-    // ── 4. High-res image fallbacks ─────────────────────────────────────────
-    if (!image) {
-      // Look for large product images by data attributes
-      const dataPatterns = [
-        /data-src=["'](https:\/\/[^"']*(?:product|item|pdp)[^"']*\.(?:jpg|jpeg|png|webp)[^"']*)["']/i,
-        /data-zoom-image=["'](https:\/\/[^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/i,
-        /"large":"(https:\/\/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/i,
-        /"zoom":"(https:\/\/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/i,
-      ];
-      for (const p of dataPatterns) {
-        const m = html.match(p);
-        if (m?.[1]) { image = m[1]; break; }
-      }
-    }
-
-    // Resolve protocol-relative URLs
-    if (image?.startsWith('//')) {
-      const base = new URL(url);
-      image = base.protocol + image;
-    }
-
-    res.status(200).json({ price: price || null, image: image || null });
-
+    return res.json({
+      name: ogTitle || h1Tag || titleTag || null,
+      brand: null,
+      price,
+      image: ogImage || null,
+      description: ogDesc || null,
+    });
   } catch (e) {
-    res.status(200).json({ price: null, image: null, note: e.message });
+    return res.json({ name: null, brand: null, price: null, image: null, description: null });
   }
 }
