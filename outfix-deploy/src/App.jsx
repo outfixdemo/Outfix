@@ -130,72 +130,143 @@ const sb = {
 // ── AUTH SCREEN ───────────────────────────────────────────────────────────────
 function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState("signin"); // signin | signup
+  const [step, setStep] = useState("auth"); // auth | username
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
+  const [usernameError, setUsernameError] = useState("");
+  const [pendingSession, setPendingSession] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const inputStyle = {
+    width:"100%", boxSizing:"border-box", background:"#141414",
+    border:"1px solid #2A2A2A", borderRadius:12, padding:"13px 16px",
+    color:"#F0EBE3", outline:"none", fontFamily:"Montserrat,sans-serif", fontSize:12,
+  };
+
   const submit = async () => {
-    console.log("Auth submit — mode:", mode, "email:", email.trim());
     if (!email.trim() || !password.trim()) { setError("Please fill in all fields"); return; }
     if (mode === "signup" && !name.trim()) { setError("Please enter your name"); return; }
     setLoading(true); setError("");
     try {
       if (mode === "signup") {
-        // Sign up new user
         const res = await sb.signUp(email.trim(), password, name.trim());
         const err = res.error || res.error_description;
         if (err) { setError(typeof err === "string" ? err : err.message || "Sign up failed"); setLoading(false); return; }
         if (!res.access_token) {
-          // Email confirmation required — tell the user
-          setError(""); 
           setLoading(false);
           alert("Account created! Please check your email and click the confirmation link before signing in.");
           setMode("signin");
           return;
         }
+        // Account created — go to username step before entering app
         sb.saveSession(res);
-        onAuth(res);
+        setPendingSession(res);
+        setStep("username");
+        setLoading(false);
+        return;
       } else {
-        // Sign in existing user only
         const res = await sb.signIn(email.trim(), password);
-        console.log("signIn full response:", JSON.stringify(res));
-        
-        // HARD BLOCK — only a real JWT token with correct format opens the app
         const token = res?.access_token;
         const isRealToken = typeof token === "string" && token.startsWith("eyJ") && token.length > 100;
-        
-        if (!isRealToken) {
-          setError("Incorrect email or password. Please try again.");
-          setLoading(false);
-          return;
-        }
-        
-        // Double-check: decode token payload and verify it has a real user id
+        if (!isRealToken) { setError("Incorrect email or password. Please try again."); setLoading(false); return; }
         try {
           const payload = JSON.parse(atob(token.split(".")[1]));
-          console.log("Token payload:", JSON.stringify(payload));
-          if (!payload?.sub || payload.sub.length < 10) {
-            setError("Authentication failed. Please try again.");
-            setLoading(false);
-            return;
-          }
-        } catch(decodeErr) {
-          setError("Authentication failed. Please try again.");
-          setLoading(false);
-          return;
-        }
-        
+          if (!payload?.sub || payload.sub.length < 10) { setError("Authentication failed. Please try again."); setLoading(false); return; }
+        } catch(e) { setError("Authentication failed. Please try again."); setLoading(false); return; }
         sb.saveSession(res);
         onAuth(res);
       }
+    } catch(e) { setError("Connection error — please try again"); }
+    setLoading(false);
+  };
+
+  const saveUsername = async () => {
+    const u = username.trim();
+    if (!u) { setUsernameError("Please choose a username"); return; }
+    if (u.length < 3) { setUsernameError("Username must be at least 3 characters"); return; }
+    if (!/^[a-zA-Z0-9_\.]+$/.test(u)) { setUsernameError("Only letters, numbers, _ and . allowed"); return; }
+    setLoading(true); setUsernameError("");
+    try {
+      const userId = pendingSession?.user?.id;
+      // Save profile with username
+      await fetch(`${SB_URL}/rest/v1/profiles`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${pendingSession.access_token}`,
+          "apikey": SB_KEY,
+          "Prefer": "resolution=merge-duplicates,return=representation",
+        },
+        body: JSON.stringify({ id: userId, username: u }),
+      });
+      onAuth(pendingSession);
     } catch(e) {
-      setError("Connection error — please try again");
+      // Even if save fails, let them in — they can set username in settings
+      onAuth(pendingSession);
     }
     setLoading(false);
   };
 
+  // ── USERNAME STEP ────────────────────────────────────────────────────────
+  if (step === "username") {
+    return (
+      <div style={{position:"fixed",inset:0,background:"#0D0D0D",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px 24px",maxWidth:430,margin:"0 auto",fontFamily:"'Cormorant Garamond','Georgia',serif",color:"#F0EBE3"}}>
+        <div style={{textAlign:"center",marginBottom:36}}>
+          <div style={{fontSize:44,marginBottom:12}}>✦</div>
+          <div style={{fontSize:30,fontWeight:300,letterSpacing:4,color:"#C4A882",marginBottom:8}}>One last step</div>
+          <div style={{fontFamily:"Montserrat,sans-serif",fontSize:11,color:"#5A5048",letterSpacing:1}}>CHOOSE YOUR USERNAME</div>
+        </div>
+
+        <div style={{width:"100%",maxWidth:320}}>
+          <div style={{fontFamily:"Montserrat,sans-serif",fontSize:9,color:"#5A5048",letterSpacing:1.5,marginBottom:10}}>
+            This is how other Outfix users will find and follow you.
+          </div>
+
+          {/* Username input with @ prefix */}
+          <div style={{display:"flex",alignItems:"center",background:"#141414",border:`1px solid ${username.trim().length>=3?"#C4A88266":"#2A2A2A"}`,borderRadius:12,padding:"13px 16px",marginBottom:10,gap:6}}>
+            <span style={{fontFamily:"Montserrat,sans-serif",fontSize:14,color:"#C4A882",fontWeight:600}}>@</span>
+            <input
+              value={username}
+              onChange={e=>{setUsername(e.target.value.replace(/\s/g,"").toLowerCase());setUsernameError("");}}
+              onKeyDown={e=>e.key==="Enter"&&saveUsername()}
+              placeholder="yourname"
+              autoFocus
+              style={{flex:1,background:"none",border:"none",outline:"none",color:"#F0EBE3",fontFamily:"Montserrat,sans-serif",fontSize:14}}
+            />
+            {username.length>=3&&/^[a-zA-Z0-9_\.]+$/.test(username)&&(
+              <span style={{color:"#80C880",fontSize:16}}>✓</span>
+            )}
+          </div>
+
+          {/* Rules hint */}
+          <div style={{fontFamily:"Montserrat,sans-serif",fontSize:9,color:"#3A3028",marginBottom:usernameError?8:20,lineHeight:1.6}}>
+            Letters, numbers, _ and . only · Min 3 characters
+          </div>
+
+          {usernameError&&(
+            <div style={{background:"#1A0A0A",border:"1px solid #3A1A1A",borderRadius:10,padding:"9px 12px",fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#C08080",marginBottom:12}}>
+              {usernameError}
+            </div>
+          )}
+
+          <button onClick={saveUsername} disabled={loading}
+            style={{width:"100%",padding:"14px",borderRadius:12,background:loading?"#2A2A2A":"linear-gradient(135deg,#C4A882,#8A6E54)",border:"none",cursor:loading?"default":"pointer",fontFamily:"Montserrat,sans-serif",fontSize:10,fontWeight:700,color:loading?"#5A5048":"#0D0D0D",letterSpacing:1.5,marginBottom:10}}>
+            {loading?"SAVING…":"LET'S GO →"}
+          </button>
+
+          <button onClick={()=>onAuth(pendingSession)}
+            style={{width:"100%",padding:"11px",borderRadius:12,background:"transparent",border:"none",cursor:"pointer",fontFamily:"Montserrat,sans-serif",fontSize:9,color:"#3A3028",letterSpacing:1}}>
+            SKIP FOR NOW
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── AUTH STEP ────────────────────────────────────────────────────────────
   return (
     <div style={{
       position:"fixed", inset:0, background:"#0D0D0D",
@@ -226,23 +297,16 @@ function AuthScreen({ onAuth }) {
       <div style={{width:"100%", maxWidth:320, display:"flex", flexDirection:"column", gap:10}}>
         {mode==="signup" && (
           <input value={name} onChange={e=>setName(e.target.value)}
-            placeholder="Your name"
-            style={{width:"100%", boxSizing:"border-box", background:"#141414", border:"1px solid #2A2A2A",
-              borderRadius:12, padding:"13px 16px", color:"#F0EBE3", outline:"none",
-              fontFamily:"Montserrat,sans-serif", fontSize:12}}/>
+            placeholder="Your name" style={inputStyle}/>
         )}
         <input value={email} onChange={e=>setEmail(e.target.value)}
           placeholder="Email address" type="email"
           onKeyDown={e=>e.key==="Enter"&&submit()}
-          style={{width:"100%", boxSizing:"border-box", background:"#141414", border:"1px solid #2A2A2A",
-            borderRadius:12, padding:"13px 16px", color:"#F0EBE3", outline:"none",
-            fontFamily:"Montserrat,sans-serif", fontSize:12}}/>
+          style={inputStyle}/>
         <input value={password} onChange={e=>setPassword(e.target.value)}
           placeholder="Password" type="password"
           onKeyDown={e=>e.key==="Enter"&&submit()}
-          style={{width:"100%", boxSizing:"border-box", background:"#141414", border:"1px solid #2A2A2A",
-            borderRadius:12, padding:"13px 16px", color:"#F0EBE3", outline:"none",
-            fontFamily:"Montserrat,sans-serif", fontSize:12}}/>
+          style={inputStyle}/>
 
         {error && (
           <div style={{background:"#1A0A0A", border:"1px solid #3A1A1A", borderRadius:10,
@@ -317,9 +381,9 @@ const initItems = [
 ];
 
 const initOutfits = [
-  { id:1, name:"Office Chic",    items:[1,2,7,8], occasion:"Work",    season:"All Year",   wornHistory:["2026-03-11","2026-03-09","2026-03-05","2026-03-03","2026-02-27","2026-02-24","2026-02-20","2026-02-18"] },
-  { id:2, name:"Weekend Ease",   items:[3,2,6],   occasion:"Casual",  season:"Fall/Winter",wornHistory:["2026-03-08","2026-03-01","2026-02-22","2026-02-15","2026-02-08"] },
-  { id:3, name:"Summer Soiree",  items:[9,8],     occasion:"Evening", season:"Evening",    wornHistory:["2026-03-07","2026-02-28","2026-02-14"] },
+  { id:1, name:"Office Chic",   items:[1,2,7,8], occasion:"Work",   season:"All Year",   wornHistory:["2026-03-11","2026-03-05","2026-02-27"] },
+  { id:2, name:"Weekend Ease",  items:[3,2,6],   occasion:"Casual", season:"All Year",   wornHistory:["2026-03-08","2026-03-01"] },
+  { id:3, name:"Summer Soiree", items:[9,8],     occasion:"Social Event", season:"All Year", wornHistory:["2026-03-07"] },
 ];
 
 const suggestions = [
@@ -484,7 +548,7 @@ const trendItems = [
 ];
 
 // Insurance / valuation data (augments initItems)
-const resaleValues = { 1:95, 2:65, 3:80, 4:55, 5:680, 6:220, 7:45, 8:40, 9:120, 10:35 };
+// Resale value estimated as ~45% of purchase price (used inline where needed)
 
 // Push notification scenarios
 const initPushNotifs = [
@@ -530,6 +594,108 @@ const ss = (sz,w=400,c="#F0EBE3",x={}) => ({fontFamily:"'Montserrat',sans-serif"
 
 function Lbl({children,mb=12}){return <div style={ss(9,400,DM,{letterSpacing:2,textTransform:"uppercase",marginBottom:mb})}>{children}</div>;}
 function Tag({children}){return <span style={{background:"#1E1E1E",borderRadius:20,padding:"5px 12px",...ss(9,400,MD,{letterSpacing:1})}}>{children}</span>;}
+
+// ── DATE PICKERS ──────────────────────────────────────────────────────────────
+const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+const MONTHS_SHORT=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const selStyle=(active)=>({
+  flex:1,background:"#0D0D0D",border:`1px solid ${active?"#C4A882":"#2A2A2A"}`,
+  borderRadius:10,padding:"9px 6px",color:active?"#C4A882":"#8A7968",
+  fontFamily:"'Montserrat',sans-serif",fontSize:11,fontWeight:400,
+  outline:"none",cursor:"pointer",appearance:"none",WebkitAppearance:"none",
+  backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238A7968'/%3E%3C/svg%3E")`,
+  backgroundRepeat:"no-repeat",backgroundPosition:"calc(100% - 8px) center",paddingRight:22,
+  textAlign:"center",
+});
+
+// Month + Year only (for purchase dates)
+function MonthYearPicker({value, onChange, label}){
+  const [month,setMonth]=useState(-1);
+  const [year,setYear]=useState(-1);
+
+  useEffect(()=>{
+    const parts = value ? value.split(" ") : [];
+    const m = parts[0] ? MONTHS_SHORT.indexOf(parts[0]) : -1;
+    const y = parts[1] ? parseInt(parts[1]) : -1;
+    if(m>=0) setMonth(m);
+    if(y>0) setYear(y);
+  },[]);
+
+  const currentYear=new Date().getFullYear();
+  const years=Array.from({length:30},(_,i)=>currentYear-i);
+
+  const emit=(m,y)=>{
+    if(m>=0 && y>0) onChange(`${MONTHS_SHORT[m]} ${y}`);
+    else onChange("");
+  };
+
+  return(
+    <div>
+      {label&&<div style={ss(9,400,"#5A5048",{letterSpacing:1.5,textTransform:"uppercase",marginBottom:6})}>{label}</div>}
+      <div style={{display:"flex",gap:8}}>
+        <select value={month} onChange={e=>{const m=parseInt(e.target.value);setMonth(m);emit(m,year);}} style={selStyle(month>=0)}>
+          <option value={-1}>Month</option>
+          {MONTHS.map((m,i)=><option key={i} value={i}>{m}</option>)}
+        </select>
+        <select value={year} onChange={e=>{const y=parseInt(e.target.value);setYear(y);emit(month,y);}} style={{...selStyle(year>0),flex:"0 0 90px"}}>
+          <option value={-1}>Year</option>
+          {years.map(y=><option key={y} value={y}>{y}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
+
+// Day + Month + Year (for events / travel)
+function FullDatePicker({value, onChange, label}){
+  const [day,setDay]=useState(-1);
+  const [month,setMonth]=useState(-1);
+  const [year,setYear]=useState(-1);
+
+  useEffect(()=>{
+    if(!value) return;
+    const iso=value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(iso){ setDay(parseInt(iso[3])); setMonth(parseInt(iso[2])-1); setYear(parseInt(iso[1])); return; }
+    const parts=value.replace(/^[A-Za-z]+\s/,"").split(" ");
+    const mIdx=MONTHS_SHORT.findIndex(ms=>parts[0]?.startsWith(ms));
+    const d=parseInt(parts[1]);
+    if(mIdx>=0) setMonth(mIdx);
+    if(!isNaN(d)) setDay(d);
+  },[]);
+
+  const currentYear=new Date().getFullYear();
+  const years=Array.from({length:5},(_,i)=>currentYear+i);
+  const daysInMonth=month>=0 && year>0 ? new Date(year,month+1,0).getDate() : 31;
+  const days=Array.from({length:daysInMonth},(_,i)=>i+1);
+
+  const emit=(d,m,y)=>{
+    if(d>0 && m>=0 && y>0){
+      const dateObj=new Date(y,m,d);
+      const wd=dateObj.toLocaleDateString("en-US",{weekday:"short"});
+      onChange(`${wd} ${MONTHS_SHORT[m]} ${d}`);
+    } else onChange("");
+  };
+
+  return(
+    <div>
+      {label&&<div style={ss(9,400,"#5A5048",{letterSpacing:1.5,textTransform:"uppercase",marginBottom:6})}>{label}</div>}
+      <div style={{display:"flex",gap:8}}>
+        <select value={month} onChange={e=>{const m=parseInt(e.target.value);setMonth(m);if(day>0&&year>0)emit(day,m,year);}} style={selStyle(month>=0)}>
+          <option value={-1}>Month</option>
+          {MONTHS.map((m,i)=><option key={i} value={i}>{m}</option>)}
+        </select>
+        <select value={day} onChange={e=>{const d=parseInt(e.target.value);setDay(d);if(month>=0&&year>0)emit(d,month,year);}} style={{...selStyle(day>0),flex:"0 0 68px"}}>
+          <option value={-1}>Day</option>
+          {days.map(d=><option key={d} value={d}>{d}</option>)}
+        </select>
+        <select value={year} onChange={e=>{const y=parseInt(e.target.value);setYear(y);if(day>0&&month>=0)emit(day,month,y);}} style={{...selStyle(year>0),flex:"0 0 82px"}}>
+          <option value={-1}>Year</option>
+          {years.map(y=><option key={y} value={y}>{y}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
 
 function Btn({children,onClick,full,outline,small}){
   const p = small?"7px 14px":"12px 20px";
@@ -595,392 +761,55 @@ function AvatarPortrait({user,size=40}){
 
 // Each item gets a bespoke SVG illustration. ItemIllustration renders at any size.
 
-const illustrations = {
-  // id:1 — Silk Ivory Blouse (Equipment)
-  1: ({w,h})=>(
-    <svg viewBox="0 0 120 130" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="ib1" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0%" stopColor="#FDFAF5"/><stop offset="100%" stopColor="#EDE8DF"/></linearGradient>
-        <linearGradient id="ib1s" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="#00000010"/><stop offset="100%" stopColor="transparent"/></linearGradient>
-      </defs>
-      {/* body */}
-      <path d="M36 28 C28 34,22 55,22 90 L98 90 C98 55,92 34,84 28 C76 22,66 20,60 20 C54 20,44 22,36 28Z" fill="url(#ib1)" stroke="#D8D2C8" strokeWidth="0.8"/>
-      {/* left sleeve */}
-      <path d="M36 28 C26 26,14 30,10 40 C8 50,10 68,14 76 L28 72 C26 64,25 50,28 42 C30 36,34 30,36 28Z" fill="url(#ib1)" stroke="#D8D2C8" strokeWidth="0.8"/>
-      {/* right sleeve */}
-      <path d="M84 28 C94 26,106 30,110 40 C112 50,110 68,106 76 L92 72 C94 64,95 50,92 42 C90 36,86 30,84 28Z" fill="url(#ib1)" stroke="#D8D2C8" strokeWidth="0.8"/>
-      {/* collar V */}
-      <path d="M46 28 L60 54 L74 28" fill="none" stroke="#C8C0B4" strokeWidth="1"/>
-      {/* button placket */}
-      <line x1="60" y1="54" x2="60" y2="90" stroke="#D0C8BC" strokeWidth="0.8" strokeDasharray="2,3"/>
-      {[62,72,82].map((y,i)=><circle key={i} cx="60" cy={y} r="1.5" fill="#C0B8AE"/>)}
-      {/* fabric sheen */}
-      <path d="M36 28 C40 40,42 60,40 90" stroke="#FFFFFF" strokeWidth="1.5" opacity="0.5" strokeLinecap="round"/>
-      {/* cuff detail */}
-      <line x1="14" y1="73" x2="28" y2="69" stroke="#C8C0B4" strokeWidth="1"/>
-      <line x1="92" y1="69" x2="106" y2="73" stroke="#C8C0B4" strokeWidth="1"/>
-    </svg>
-  ),
-  // id:2 — Wide Leg Trousers (COS)
-  2: ({w,h})=>(
-    <svg viewBox="0 0 120 140" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="it2" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor="#3A4F64"/><stop offset="100%" stopColor="#1E3040"/></linearGradient>
-      </defs>
-      {/* waistband */}
-      <rect x="24" y="16" width="72" height="12" rx="2" fill="#2A3E52" stroke="#1A2E40" strokeWidth="0.5"/>
-      {/* belt loop */}
-      <rect x="56" y="14" width="8" height="5" rx="1" fill="none" stroke="#1A2E40" strokeWidth="0.8"/>
-      {/* left leg — wide */}
-      <path d="M24 28 C20 60,14 100,10 136 L52 136 C54 100,56 60,60 28Z" fill="url(#it2)"/>
-      {/* right leg — wide */}
-      <path d="M96 28 C100 60,106 100,110 136 L68 136 C66 100,64 60,60 28Z" fill="url(#it2)"/>
-      {/* centre crease */}
-      <line x1="60" y1="28" x2="42" y2="136" stroke="#162838" strokeWidth="0.8" opacity="0.6"/>
-      <line x1="60" y1="28" x2="78" y2="136" stroke="#162838" strokeWidth="0.8" opacity="0.6"/>
-      {/* fabric highlight */}
-      <path d="M28 30 C26 60,22 100,18 134" stroke="#4A6080" strokeWidth="1" opacity="0.5" strokeLinecap="round"/>
-      {/* hem */}
-      <line x1="10" y1="133" x2="52" y2="133" stroke="#162838" strokeWidth="1"/>
-      <line x1="68" y1="133" x2="110" y2="133" stroke="#162838" strokeWidth="1"/>
-    </svg>
-  ),
-  // id:3 — Cashmere Crewneck (Everlane)
-  3: ({w,h})=>(
-    <svg viewBox="0 0 120 120" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="it3" x1="0" y1="0" x2="0.2" y2="1"><stop offset="0%" stopColor="#D4B890"/><stop offset="100%" stopColor="#B89A6A"/></linearGradient>
-      </defs>
-      {/* body */}
-      <path d="M34 32 C28 40,24 64,24 96 L96 96 C96 64,92 40,86 32 C78 26,68 24,60 24 C52 24,42 26,34 32Z" fill="url(#it3)"/>
-      {/* left sleeve */}
-      <path d="M34 32 C24 28,12 34,8 46 C6 56,8 72,12 80 L28 76 C26 68,26 54,28 46 C30 40,32 34,34 32Z" fill="url(#it3)"/>
-      {/* right sleeve */}
-      <path d="M86 32 C96 28,108 34,112 46 C114 56,112 72,108 80 L92 76 C94 68,94 54,92 46 C90 40,88 34,86 32Z" fill="url(#it3)"/>
-      {/* crewneck rib */}
-      <path d="M46 30 C48 22,52 18,60 18 C68 18,72 22,74 30" fill="none" stroke="#A07E52" strokeWidth="2.5" strokeLinecap="round"/>
-      {/* knit texture */}
-      {[48,58,68,78,88].map((y,i)=>(
-        <line key={i} x1="25" y1={y} x2="95" y2={y} stroke="#C4A06888" strokeWidth="0.7" strokeDasharray="3,4"/>
-      ))}
-      {/* cuff ribs */}
-      {[0,3,6].map(i=><line key={i} x1={10+i} y1="77" x2={12+i} y2="82" stroke="#A07E52" strokeWidth="0.8"/>)}
-      {[0,3,6].map(i=><line key={i} x1={108+i} y1="77" x2={110+i} y2="82" stroke="#A07E52" strokeWidth="0.8"/>)}
-      {/* hem rib */}
-      <line x1="24" y1="94" x2="96" y2="94" stroke="#A07E52" strokeWidth="1.5"/>
-    </svg>
-  ),
-  // id:4 — Mini Leather Skirt (& Other Stories)
-  4: ({w,h})=>(
-    <svg viewBox="0 0 120 100" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="it4" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor="#2A2A2A"/><stop offset="100%" stopColor="#0D0D0D"/></linearGradient>
-        <linearGradient id="it4sh" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#FFFFFF08"/><stop offset="100%" stopColor="transparent"/></linearGradient>
-      </defs>
-      {/* waistband */}
-      <rect x="22" y="12" width="76" height="10" rx="2" fill="#1A1A1A" stroke="#333" strokeWidth="0.5"/>
-      {/* zip detail */}
-      <line x1="60" y1="12" x2="60" y2="22" stroke="#404040" strokeWidth="1"/>
-      <rect x="57" y="14" width="6" height="4" rx="0.5" fill="#505050"/>
-      {/* main skirt — A-line mini */}
-      <path d="M22 22 C18 42,14 62,12 88 L108 88 C106 62,102 42,98 22Z" fill="url(#it4)"/>
-      {/* leather sheen — diagonal highlight */}
-      <path d="M26 24 C30 44,32 64,28 88" stroke="#FFFFFF" strokeWidth="3" opacity="0.07" strokeLinecap="round"/>
-      <path d="M22 22 L108 22" stroke="#333" strokeWidth="0.5"/>
-      {/* hem */}
-      <line x1="12" y1="86" x2="108" y2="86" stroke="#1A1A1A" strokeWidth="2"/>
-      {/* stitch detail on hem */}
-      <line x1="12" y1="84" x2="108" y2="84" stroke="#333" strokeWidth="0.5" strokeDasharray="4,3"/>
-      {/* sheen overlay */}
-      <path d="M22 22 L98 22 L90 88 L30 88Z" fill="url(#it4sh)"/>
-    </svg>
-  ),
-  // id:5 — Trench Coat (Burberry)
-  5: ({w,h})=>(
-    <svg viewBox="0 0 140 160" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="it5" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor="#D4AA6A"/><stop offset="100%" stopColor="#A88040"/></linearGradient>
-        <linearGradient id="it5d" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#C09850"/><stop offset="100%" stopColor="#8A6030"/></linearGradient>
-      </defs>
-      {/* back body */}
-      <path d="M40 38 C32 50,28 90,28 150 L112 150 C112 90,108 50,100 38Z" fill="#C09850" opacity="0.5"/>
-      {/* left panel */}
-      <path d="M40 38 C30 45,18 52,12 64 C8 76,8 110,12 138 L44 130 C42 108,42 76,46 62 C44 52,42 44,40 38Z" fill="url(#it5)" stroke="#906820" strokeWidth="0.5"/>
-      {/* right panel */}
-      <path d="M100 38 C110 45,122 52,128 64 C132 76,132 110,128 138 L96 130 C98 108,98 76,94 62 C96 52,98 44,100 38Z" fill="url(#it5)" stroke="#906820" strokeWidth="0.5"/>
-      {/* centre back */}
-      <path d="M46 40 L94 40 L96 150 L44 150Z" fill="url(#it5)"/>
-      {/* left lapel */}
-      <path d="M46 40 C50 50,56 62,60 78 C56 62,50 50,46 40Z" fill="url(#it5d)" stroke="#906820" strokeWidth="0.3"/>
-      {/* right lapel */}
-      <path d="M94 40 C90 50,84 62,80 78 C84 62,90 50,94 40Z" fill="url(#it5d)" stroke="#906820" strokeWidth="0.3"/>
-      {/* belt */}
-      <path d="M28 96 L112 96 L114 106 L26 106Z" fill="#8A6020" opacity="0.8"/>
-      <rect x="64" y="97" width="12" height="8" rx="1" fill="#B8902A"/>
-      {/* buttons */}
-      {[120,136].map((y,i)=><circle key={i} cx="70" cy={y} r="3" fill="#906820" stroke="#704E10" strokeWidth="0.5"/>)}
-      {/* storm flap */}
-      <path d="M44 40 L56 40 L58 82 L42 82Z" fill="#C09850" opacity="0.6"/>
-      {/* pockets */}
-      <rect x="30" y="112" width="24" height="4" rx="1" fill="#906820" opacity="0.6"/>
-      <rect x="86" y="112" width="24" height="4" rx="1" fill="#906820" opacity="0.6"/>
-      {/* collar points */}
-      <path d="M46 40 C42 34,38 28,36 24" fill="none" stroke="#906820" strokeWidth="1.5" strokeLinecap="round"/>
-      <path d="M94 40 C98 34,102 28,104 24" fill="none" stroke="#906820" strokeWidth="1.5" strokeLinecap="round"/>
-    </svg>
-  ),
-  // id:6 — White Sneakers (Common Projects)
-  6: ({w,h})=>(
-    <svg viewBox="0 0 130 90" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="it6" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#FFFFFF"/><stop offset="100%" stopColor="#F0EDE8"/></linearGradient>
-      </defs>
-      {/* sole */}
-      <path d="M10 66 C10 74,20 80,60 80 C100 80,120 74,120 66 L120 60 L10 60Z" fill="#E8E4DE" stroke="#D0CBC4" strokeWidth="0.8"/>
-      {/* midsole line */}
-      <line x1="10" y1="62" x2="120" y2="62" stroke="#D8D4CE" strokeWidth="1"/>
-      {/* upper */}
-      <path d="M18 60 C16 44,20 28,32 22 C44 16,68 14,88 20 C104 26,116 40,118 60Z" fill="url(#it6)" stroke="#E0DCD6" strokeWidth="0.8"/>
-      {/* toe cap seam */}
-      <path d="M18 60 C20 48,26 36,36 28" fill="none" stroke="#D8D4CE" strokeWidth="0.8"/>
-      {/* tongue */}
-      <path d="M58 22 C56 30,54 44,54 60 L70 60 C70 44,68 30,66 22Z" fill="#F8F6F2" stroke="#E0DCD6" strokeWidth="0.5"/>
-      {/* laces */}
-      {[[50,36,74,32],[48,42,72,38],[46,48,70,44],[44,54,68,50]].map(([x1,y1,x2,y2],i)=>(
-        <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#D0CCC6" strokeWidth="1" strokeLinecap="round"/>
-      ))}
-      {/* gold serial number detail (Common Projects signature) */}
-      <text x="86" y="56" fontSize="5" fill="#C4B888" fontFamily="monospace" letterSpacing="1">836 501</text>
-      {/* heel tab */}
-      <path d="M110 60 C114 52,114 38,112 30" fill="none" stroke="#D8D4CE" strokeWidth="1"/>
-    </svg>
-  ),
-  // id:7 — Slingback Heels (Mango)
-  7: ({w,h})=>(
-    <svg viewBox="0 0 130 100" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="it7" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0%" stopColor="#A08868"/><stop offset="100%" stopColor="#7A6448"/></linearGradient>
-      </defs>
-      {/* outsole */}
-      <path d="M16 82 C14 88,22 94,60 94 C96 94,110 90,112 84 L108 76 C106 82,90 86,60 86 C32 86,18 82,16 82Z" fill="#5A4228" opacity="0.6"/>
-      {/* heel — stiletto */}
-      <path d="M104 76 C106 70,108 54,106 28 L100 28 C102 54,102 70,100 76Z" fill="url(#it7)"/>
-      <path d="M100 26 C100 22,104 20,106 24 L106 28 L100 28Z" fill="#604A30"/>
-      {/* upper vamp */}
-      <path d="M16 78 C14 66,18 46,36 32 C52 20,80 18,104 26 L104 32 C82 26,56 28,42 40 C28 52,22 66,20 78Z" fill="url(#it7)" stroke="#7A5A38" strokeWidth="0.5"/>
-      {/* toe seam */}
-      <path d="M20 72 C22 60,30 48,44 40" fill="none" stroke="#9A7A58" strokeWidth="0.8"/>
-      {/* pointed toe */}
-      <path d="M16 78 C10 78,8 82,12 84 C14 86,18 84,20 80Z" fill="url(#it7)"/>
-      {/* slingback strap */}
-      <path d="M20 76 C18 68,16 60,20 56 L26 58 C22 62,22 68,24 74Z" fill="url(#it7)" stroke="#7A5A38" strokeWidth="0.5"/>
-      <path d="M20 56 C28 44,52 36,80 34" fill="none" stroke="#9A7A58" strokeWidth="2" strokeLinecap="round"/>
-      {/* buckle */}
-      <rect x="76" y="28" width="12" height="8" rx="1" fill="none" stroke="#C4A870" strokeWidth="1.5"/>
-      <line x1="82" y1="28" x2="82" y2="36" stroke="#C4A870" strokeWidth="1"/>
-    </svg>
-  ),
-  // id:8 — Gold Hoop Earrings (Mejuri)
-  8: ({w,h})=>(
-    <svg viewBox="0 0 120 100" width={w} height={h} fill="none">
-      <defs>
-        <radialGradient id="it8g" cx="40%" cy="35%" r="60%"><stop offset="0%" stopColor="#F0D060"/><stop offset="60%" stopColor="#C4A030"/><stop offset="100%" stopColor="#906010"/></radialGradient>
-      </defs>
-      {/* left hoop */}
-      <circle cx="38" cy="52" r="26" stroke="url(#it8g)" strokeWidth="5" fill="none"/>
-      {/* clasp left */}
-      <rect x="34" y="20" width="8" height="6" rx="1" fill="#C4A030" stroke="#A08020" strokeWidth="0.5"/>
-      {/* right hoop */}
-      <circle cx="82" cy="52" r="26" stroke="url(#it8g)" strokeWidth="5" fill="none"/>
-      {/* clasp right */}
-      <rect x="78" y="20" width="8" height="6" rx="1" fill="#C4A030" stroke="#A08020" strokeWidth="0.5"/>
-      {/* gold sheen highlights */}
-      <path d="M20 38 C22 28,30 22,40 22" stroke="#F8E880" strokeWidth="2" strokeLinecap="round" opacity="0.6"/>
-      <path d="M64 38 C66 28,74 22,84 22" stroke="#F8E880" strokeWidth="2" strokeLinecap="round" opacity="0.6"/>
-    </svg>
-  ),
-  // id:9 — Linen Midi Dress (Faithfull)
-  9: ({w,h})=>(
-    <svg viewBox="0 0 120 170" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="it9" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor="#EDE4D4"/><stop offset="100%" stopColor="#D8CCBA"/></linearGradient>
-      </defs>
-      {/* left strap */}
-      <path d="M44 16 C40 20,38 28,38 36" fill="none" stroke="#C4B89A" strokeWidth="3" strokeLinecap="round"/>
-      {/* right strap */}
-      <path d="M76 16 C80 20,82 28,82 36" fill="none" stroke="#C4B89A" strokeWidth="3" strokeLinecap="round"/>
-      {/* bodice */}
-      <path d="M30 36 C28 50,28 64,30 76 L90 76 C92 64,92 50,90 36Z" fill="url(#it9)"/>
-      {/* ruched bodice detail */}
-      {[44,52,60,68,76].map((x,i)=><line key={i} x1={x} y1="36" x2={x-2} y2="76" stroke="#C4B49088" strokeWidth="0.8"/>)}
-      {/* waist seam */}
-      <line x1="30" y1="76" x2="90" y2="76" stroke="#C0B090" strokeWidth="1"/>
-      {/* skirt — midi A-line */}
-      <path d="M30 76 C22 100,14 130,10 162 L110 162 C106 130,98 100,90 76Z" fill="url(#it9)"/>
-      {/* linen texture */}
-      {[90,105,120,135,150].map((y,i)=>(
-        <line key={i} x1="10" y1={y} x2="110" y2={y} stroke="#C4B49055" strokeWidth="0.6" strokeDasharray="6,8"/>
-      ))}
-      {/* hem */}
-      <line x1="10" y1="160" x2="110" y2="160" stroke="#C0B090" strokeWidth="0.8"/>
-      {/* small floral print suggestion */}
-      {[[35,110],[65,125],[90,108],[50,140],[80,145]].map(([x,y],i)=>(
-        <circle key={i} cx={x} cy={y} r="3" fill="none" stroke="#B0A07888" strokeWidth="0.8"/>
-      ))}
-      {[[35,110],[65,125],[90,108],[50,140],[80,145]].map(([x,y],i)=>(
-        <circle key={i} cx={x} cy={y} r="1" fill="#B8A88088"/>
-      ))}
-    </svg>
-  ),
-  // id:10 — Merino Cardigan (Uniqlo) — dusty blue
-  10: ({w,h})=>(
-    <svg viewBox="0 0 120 130" width={w} height={h} fill="none">
-      <defs>
-        <linearGradient id="it10" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor="#C4D4E8"/><stop offset="100%" stopColor="#90A8C4"/></linearGradient>
-      </defs>
-      {/* body */}
-      <path d="M36 30 C30 38,26 62,26 100 L94 100 C94 62,90 38,84 30 C76 24,66 22,60 22 C54 22,44 24,36 30Z" fill="url(#it10)"/>
-      {/* left sleeve */}
-      <path d="M36 30 C26 26,14 32,10 44 C8 54,10 72,14 80 L30 76 C28 68,28 52,30 44 C32 38,34 32,36 30Z" fill="url(#it10)"/>
-      {/* right sleeve */}
-      <path d="M84 30 C94 26,106 32,110 44 C112 54,110 72,106 80 L90 76 C92 68,92 52,90 44 C88 38,86 32,84 30Z" fill="url(#it10)"/>
-      {/* V-neck */}
-      <path d="M44 30 L60 56 L76 30" fill="none" stroke="#7090AC" strokeWidth="1.5"/>
-      {/* button band left */}
-      <rect x="54" y="56" width="6" height="44" rx="1" fill="#A8BCCE" opacity="0.5"/>
-      {/* buttons */}
-      {[62,72,82,92].map((y,i)=><circle key={i} cx="57" cy={y} r="2" fill="#8098B0" stroke="#6080A0" strokeWidth="0.5"/>)}
-      {/* knit texture */}
-      {[42,54,66,78,90].map((y,i)=>(
-        <line key={i} x1="27" y1={y} x2="93" y2={y} stroke="#A0B4CC77" strokeWidth="0.8" strokeDasharray="3,4"/>
-      ))}
-      {/* cuff and hem ribs */}
-      <line x1="26" y1="98" x2="94" y2="98" stroke="#7090AC" strokeWidth="1.5"/>
-      <line x1="14" y1="78" x2="30" y2="74" stroke="#7090AC" strokeWidth="1"/>
-      <line x1="90" y1="74" x2="106" y2="78" stroke="#7090AC" strokeWidth="1"/>
-    </svg>
-  ),
+// Emoji fallback map by category — replaces 370 lines of SVG illustration data
+const FASHION_BRANDS = [
+  // Luxury
+  "Acne Studios","Alexander McQueen","Alexander Wang","Alaïa","Balenciaga","Bottega Veneta",
+  "Burberry","Celine","Chanel","Christian Louboutin","Dior","Fendi","Givenchy","Gucci",
+  "Hermès","Isabel Marant","Jacquemus","Jil Sander","Loewe","Louis Vuitton","Maison Margiela",
+  "Miu Miu","Mulberry","Off-White","Prada","Saint Laurent","Stella McCartney","The Row",
+  "Tom Ford","Valentino","Versace","Vivienne Westwood","Zimmermann",
+  // Contemporary
+  "A.P.C.","& Other Stories","Aritzia","Arket","Banana Republic","By Malene Birger",
+  "COS","Club Monaco","Closed","Cos","Equipment","Frame","Free People","Ganni",
+  "J.Crew","Karen Millen","Khaite","Lacoste","Lemaire","Maje","Massimo Dutti",
+  "Max Mara","Me+Em","Nanushka","Rag & Bone","Ralph Lauren","Reiss","Reformation",
+  "Rouje","Scanlan Theodore","Sandro","Sezane","Sézane","Smythe","Theory",
+  "Tiger of Sweden","Toteme","Vince","Whistles","ba&sh",
+  // Accessible / High Street
+  "ASOS","Abercrombie & Fitch","AllSaints","Anthropologie","Boden","Gap","H&M",
+  "Hollister","Hugo Boss","J.Crew","Jigsaw","Lululemon","Mango","Marks & Spencer",
+  "Massimo Dutti","Madewell","Monki","Next","Primark","Pull & Bear","River Island",
+  "Topshop","Uniqlo","Urban Outfitters","Warehouse","Weekday","White Stuff","Zara",
+  // Sportswear
+  "Adidas","Arc'teryx","Asics","Columbia","Gymshark","Hoka","Lululemon","New Balance",
+  "Nike","North Face","On Running","Patagonia","Puma","Reebok","Salomon","Under Armour",
+  // Shoes
+  "Birkenstock","Common Projects","Converse","Dr. Martens","Gianvito Rossi","Jimmy Choo",
+  "Kurt Geiger","Manolo Blahnik","Miu Miu","Sam Edelman","Steve Madden","Stuart Weitzman",
+  "Superga","Tod's","UGG","Vans","Vagabond","Vivaia",
+  // Jewellery / Accessories
+  "Ana Luisa","Catbird","Completedworks","Jennifer Fisher","Mejuri","Monica Vinader",
+  "Missoma","Pandora","Sophie Buhai","Tiffany & Co.",
+].sort();
+
+const CATEGORY_EMOJI = {
+  "Tops":"👚","Bottoms":"👖","Dresses":"👗","Outerwear":"🧥",
+  "Shoes":"👟","Accessories":"✨","default":"👗"
 };
 
-// Category illustrations for items without a specific id illustration (feed, market, wishlist)
-const categoryIllustrations = {
-  "👖": ({w,h,color="#2C3E50"})=>illustrations[2]({w,h}), // reuse trousers
-  "👟": ({w,h,color="#FFF"})=>illustrations[6]({w,h}),
-  "🧣": ({w,h,color="#C4A882"})=>(
-    <svg viewBox="0 0 120 80" width={w} height={h} fill="none">
-      <defs><linearGradient id="iscarf" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor={color}/><stop offset="100%" stopColor={color+"BB"}/></linearGradient></defs>
-      <path d="M20 20 C30 16,50 12,70 16 C90 20,100 28,104 36 C108 44,106 56,96 62 C86 68,66 70,48 66 C30 62,16 54,12 44 C8 34,10 24,20 20Z" fill="url(#iscarf)" stroke={color+"88"} strokeWidth="0.8"/>
-      {[28,40,52,64,76].map((x,i)=><line key={i} x1={x} y1="18" x2={x-4} y2="64" stroke={color+"55"} strokeWidth="0.7" strokeDasharray="3,5"/>)}
-      <path d="M96 62 C100 70,98 78,90 80 L86 72 C90 72,92 68,92 64Z" fill={color} opacity="0.7"/>
-      <path d="M12 44 C8 50,4 56,6 62 L12 60 C10 56,10 50,12 46Z" fill={color} opacity="0.7"/>
-    </svg>
-  ),
-  "🩱": ({w,h})=>illustrations[4]({w,h}),
-  "🧥": ({w,h})=>illustrations[5]({w,h}),
-  "👠": ({w,h})=>illustrations[7]({w,h}),
-  "💛": ({w,h})=>illustrations[8]({w,h}),
-  "👡": ({w,h,color="#8B7355"})=>(
-    <svg viewBox="0 0 130 90" width={w} height={h} fill="none">
-      <defs><linearGradient id="isandal" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0%" stopColor={color}/><stop offset="100%" stopColor={color+"BB"}/></linearGradient></defs>
-      <path d="M10 68 C10 76,20 82,62 82 C100 82,118 76,118 68 L116 62 C114 68,96 72,62 72 C28 72,12 68,10 68Z" fill="#3A2810" opacity="0.5"/>
-      <path d="M16 64 C14 52,18 38,36 28 C52 18,82 16,108 24 L106 32 C84 26,58 28,44 38 C30 48,22 60,20 68Z" fill="url(#isandal)"/>
-      <path d="M16 64 C10 66,8 70,12 72 C14 74,20 72,20 68Z" fill={color}/>
-      <line x1="36" y1="32" x2="36" y2="62" stroke={color+"AA"} strokeWidth="2" strokeLinecap="round"/>
-      <line x1="62" y1="22" x2="62" y2="62" stroke={color+"AA"} strokeWidth="2" strokeLinecap="round"/>
-      <line x1="88" y1="26" x2="88" y2="58" stroke={color+"AA"} strokeWidth="2" strokeLinecap="round"/>
-      <line x1="14" y1="56" x2="114" y2="40" stroke={color+"66"} strokeWidth="1.5" strokeLinecap="round"/>
-    </svg>
-  ),
-  "👗": ({w,h})=>illustrations[9]({w,h}),
-  "🥼": ({w,h,color="#F0EDE6"})=>(
-    <svg viewBox="0 0 130 150" width={w} height={h} fill="none">
-      <defs><linearGradient id="iblaze" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor={color}/><stop offset="100%" stopColor={color+"CC"}/></linearGradient></defs>
-      <path d="M38 34 C28 42,20 80,22 140 L60 140 L60 140 L60 72 L60 140 L98 140 C100 80,92 42,82 34Z" fill={color+"88"} opacity="0.4"/>
-      <path d="M38 34 C28 40,14 46,8 60 C4 74,6 106,10 132 L44 124 C42 104,42 72,46 58 C44 48,40 40,38 34Z" fill="url(#iblaze)" stroke={color+"99"} strokeWidth="0.8"/>
-      <path d="M82 34 C92 40,106 46,112 60 C116 74,114 106,110 132 L76 124 C78 104,78 72,74 58 C76 48,80 40,82 34Z" fill="url(#iblaze)" stroke={color+"99"} strokeWidth="0.8"/>
-      <path d="M46 36 L74 36 L76 140 L44 140Z" fill={color} stroke={color+"AA"} strokeWidth="0.5"/>
-      <path d="M46 36 C52 46,56 58,58 74 C56 58,52 46,46 36Z" fill={color+"BB"}/>
-      <path d="M74 36 C68 46,64 58,62 74 C64 58,68 46,74 36Z" fill={color+"BB"}/>
-      {[94,112,130].map((y,i)=><circle key={i} cx="60" cy={y} r="3" fill={color+"88"} stroke={color+"55"} strokeWidth="0.5"/>)}
-      <rect x="18" y="106" width="20" height="4" rx="1" fill={color+"66"}/>
-      <rect x="92" y="106" width="20" height="4" rx="1" fill={color+"66"}/>
-    </svg>
-  ),
-  "👜": ({w,h,color="#8A7050"})=>(
-    <svg viewBox="0 0 120 110" width={w} height={h} fill="none">
-      <defs><linearGradient id="itote" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor={color}/><stop offset="100%" stopColor={color+"99"}/></linearGradient></defs>
-      {/* handles */}
-      <path d="M36 40 C34 24,40 16,50 14 C60 12,70 12,80 14 C90 16,86 24,84 40" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round"/>
-      {/* body */}
-      <rect x="14" y="40" width="92" height="64" rx="6" fill="url(#itote)" stroke={color+"88"} strokeWidth="0.8"/>
-      {/* flap */}
-      <path d="M14 40 L106 40 L106 64 C106 64,60 70,14 64Z" fill={color+"CC"}/>
-      {/* closure */}
-      <rect x="50" y="54" width="20" height="14" rx="3" fill={color+"88"} stroke={color+"55"} strokeWidth="0.8"/>
-      <circle cx="60" cy="61" r="3" fill="none" stroke={color+"AA"} strokeWidth="1.5"/>
-      {/* pocket seam */}
-      <line x1="14" y1="72" x2="106" y2="72" stroke={color+"55"} strokeWidth="0.5"/>
-      {/* logo emboss area */}
-      <rect x="36" y="78" width="48" height="18" rx="2" fill="none" stroke={color+"44"} strokeWidth="0.5"/>
-      {/* leather texture lines */}
-      <line x1="14" y1="82" x2="106" y2="82" stroke={color+"33"} strokeWidth="0.5"/>
-      <line x1="14" y1="92" x2="106" y2="92" stroke={color+"33"} strokeWidth="0.5"/>
-    </svg>
-  ),
-  "💼": ({w,h,color="#1A1A1A"})=>(
-    <svg viewBox="0 0 130 100" width={w} height={h} fill="none">
-      <defs><linearGradient id="itoteb" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor={color==="1A1A1A"?"#2A2A2A":color}/><stop offset="100%" stopColor={color}/></linearGradient></defs>
-      <path d="M44 30 C44 22,50 18,65 18 C80 18,86 22,86 30 L86 36 L44 36Z" fill="none" stroke="#444" strokeWidth="2"/>
-      <rect x="10" y="36" width="110" height="58" rx="6" fill="url(#itoteb)" stroke="#333" strokeWidth="0.8"/>
-      <line x1="10" y1="58" x2="120" y2="58" stroke="#333" strokeWidth="1"/>
-      <rect x="52" y="52" width="26" height="12" rx="3" fill="#333" stroke="#444" strokeWidth="0.5"/>
-      <circle cx="65" cy="58" r="3" fill="none" stroke="#555" strokeWidth="1.5"/>
-      <rect x="18" y="66" width="40" height="20" rx="2" fill="none" stroke="#333" strokeWidth="0.5"/>
-      <rect x="72" y="66" width="40" height="20" rx="2" fill="none" stroke="#333" strokeWidth="0.5"/>
-    </svg>
-  ),
-  "🥾": ({w,h,color="#4A3020"})=>(
-    <svg viewBox="0 0 130 100" width={w} height={h} fill="none">
-      <defs><linearGradient id="iboot" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0%" stopColor={color}/><stop offset="100%" stopColor={color+"BB"}/></linearGradient></defs>
-      <path d="M12 76 C10 84,18 92,60 92 C98 92,116 86,118 78 L114 68 C110 76,90 82,60 82 C30 82,16 76,12 76Z" fill="#2A1A08" opacity="0.7"/>
-      <path d="M24 72 C22 58,24 38,32 24 C36 18,44 14,54 12 L60 14 C60 14,66 18,68 28 L64 30 C62 22,58 18,54 14 C46 16,40 20,36 28 C28 42,26 60,28 72Z" fill="url(#iboot)"/>
-      <path d="M60 14 L68 28 L64 30 L60 18Z" fill={color+"88"}/>
-      <path d="M28 72 C26 60,28 44,36 30 L110 62 L114 70 C110 78,90 80,60 80 C36 80,24 74,24 72Z" fill="url(#iboot)"/>
-      {/* laces */}
-      {[[40,30,62,26],[38,38,64,34],[36,46,66,42],[34,54,68,50]].map(([x1,y1,x2,y2],i)=>(
-        <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#C4A882" strokeWidth="1" strokeLinecap="round"/>
-      ))}
-      <line x1="12" y1="76" x2="118" y2="74" stroke="#1A0A02" strokeWidth="1.5"/>
-    </svg>
-  ),
-  "🧤": ({w,h,color="#4A3830"})=>(
-    <svg viewBox="0 0 120 120" width={w} height={h} fill="none">
-      <defs><linearGradient id="iglove" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0%" stopColor={color}/><stop offset="100%" stopColor={color+"AA"}/></linearGradient></defs>
-      {/* left glove */}
-      <path d="M16 80 C14 66,16 44,22 30 C26 22,32 18,40 18 C48 18,52 22,54 30 L52 50 C48 44,44 40,40 38 C36 36,32 40,30 50 L28 80Z" fill="url(#iglove)" stroke={color+"88"} strokeWidth="0.8"/>
-      <path d="M52 30 L56 18 C58 14,62 14,64 18 L60 34Z" fill={color}/>
-      <path d="M54 30 L58 20 C60 16,64 16,66 20 L62 36Z" fill={color} opacity="0.8"/>
-      <path d="M56 32 L60 22 C62 18,66 18,68 22 L64 38Z" fill={color} opacity="0.6"/>
-      {/* stitch detail */}
-      <path d="M20 76 C18 62,20 46,26 34" fill="none" stroke={color+"66"} strokeWidth="0.8" strokeDasharray="3,3"/>
-      {/* right glove — slightly offset */}
-      <path d="M66 84 C64 70,66 48,72 34 C76 26,82 22,90 22 C98 22,102 26,104 34 L102 54 C98 48,94 44,90 42 C86 40,82 44,80 54 L78 84Z" fill="url(#iglove)" stroke={color+"88"} strokeWidth="0.8"/>
-    </svg>
-  ),
-  "🧶": ({w,h})=>illustrations[3]({w,h}),
-  "👚": ({w,h})=>illustrations[1]({w,h}),
-};
-
-// Generic fallback by category
-const categoryFallbacks = {
-  "Tops": illustrations[1],
-  "Bottoms": illustrations[2],
-  "Outerwear": illustrations[5],
-  "Shoes": illustrations[6],
-  "Accessories": illustrations[8],
-  "Dresses": illustrations[9],
-};
-
+function ItemIllustration({item, size=60, style={}}){
+  const emoji = item?.emoji || CATEGORY_EMOJI[item?.category] || CATEGORY_EMOJI.default;
+  return(
+    <div style={{
+      width:size, height:size, display:"flex", alignItems:"center",
+      justifyContent:"center", fontSize:Math.round(size*0.52),
+      flexShrink:0, ...style
+    }}>
+      {emoji}
+    </div>
+  );
+}
 function hexToColorName(hex){
   const h=hex.replace("#","").toLowerCase();
   const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
@@ -1017,29 +846,6 @@ function hexToColorName(hex){
   return "Pink";
 }
 
-function ItemIllustration({item, size=60, style={}}){
-  const w = size; const h = size;
-  // Try specific item id first
-  if(item?.id && illustrations[item.id]) {
-    const Comp = illustrations[item.id];
-    return <div style={{width:w,height:h,flexShrink:0,...style}}><Comp w={w} h={h}/></div>;
-  }
-  // Try emoji mapping
-  const emoji = item?.emoji || item?.img || "";
-  if(emoji && categoryIllustrations[emoji]) {
-    const Comp = categoryIllustrations[emoji];
-    const col = item?.color || "#888888";
-    return <div style={{width:w,height:h,flexShrink:0,...style}}><Comp w={w} h={h} color={col}/></div>;
-  }
-  // Try category fallback
-  const cat = item?.category;
-  if(cat && categoryFallbacks[cat]) {
-    const Comp = categoryFallbacks[cat];
-    return <div style={{width:w,height:h,flexShrink:0,...style}}><Comp w={w} h={h}/></div>;
-  }
-  // Absolute fallback — small emoji
-  return <div style={{width:w,height:h,display:"flex",alignItems:"center",justifyContent:"center",fontSize:Math.round(w*0.5),flexShrink:0,...style}}>{emoji||"👗"}</div>;
-}
 
 function ItemThumb({item,size=44,r=10,border}){
   const b=border||`1px solid #2A2A2A`;
@@ -1050,17 +856,85 @@ function ItemThumb({item,size=44,r=10,border}){
   );
 }
 
+// Samples the corner pixel of an image to extract background color
+function useImageBg(src, fallback="#1A1A1A"){
+  const [bg,setBg]=useState(fallback);
+  useEffect(()=>{
+    if(!src) return;
+    const img=new Image();
+    img.crossOrigin="anonymous";
+    img.onload=()=>{
+      try{
+        const canvas=document.createElement("canvas");
+        canvas.width=img.naturalWidth; canvas.height=img.naturalHeight;
+        const ctx=canvas.getContext("2d");
+        ctx.drawImage(img,0,0);
+        const size=img.naturalWidth;
+        const h=img.naturalHeight;
+        const samples=[
+          ctx.getImageData(4,4,1,1).data,
+          ctx.getImageData(size-5,4,1,1).data,
+          ctx.getImageData(4,h-5,1,1).data,
+          ctx.getImageData(size-5,h-5,1,1).data,
+        ];
+        const r=Math.round(samples.reduce((s,d)=>s+d[0],0)/4);
+        const g=Math.round(samples.reduce((s,d)=>s+d[1],0)/4);
+        const b=Math.round(samples.reduce((s,d)=>s+d[2],0)/4);
+        const hex=`#${r.toString(16).padStart(2,"0")}${g.toString(16).padStart(2,"0")}${b.toString(16).padStart(2,"0")}`;
+        setBg(hex);
+      }catch(e){ /* CORS tainted — use fallback */ }
+    };
+    img.onerror=()=>{}; // silently use fallback
+    // Add cache-busting only for non-data URLs to help with CORS
+    img.src=src.startsWith("data:") ? src : src+(src.includes("?")?"&":"?")+"_cb=1";
+  },[src]);
+  return bg;
+}
+
+// Closet grid card with auto-detected background color
+function ClosetItemCard({item,isFav,onSelect,onToggleFav}){
+  const bg=useImageBg(item.sourceImage, item.color||"#1A1A1A");
+  return(
+    <div className="ch" onClick={onSelect} style={{background:CD,borderRadius:16,overflow:"hidden",border:`1px solid ${BR}`,position:"relative"}}>
+      <div style={{height:160,background:item.sourceImage?bg:`linear-gradient(135deg,${item.color}22,${item.color}55)`,display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden",transition:"background 0.4s ease"}}>
+        {item.sourceImage
+          ? <img src={item.sourceImage} style={{width:"100%",height:"100%",objectFit:"contain",padding:"8px",boxSizing:"border-box"}} alt={item.name}/>
+          : <ItemIllustration item={item} size={110}/>
+        }
+        {item.forSale && <div style={{position:"absolute",top:8,right:8,background:G,color:BK,...ss(8,700,BK,{letterSpacing:1,padding:"3px 7px",borderRadius:10})}}>FOR SALE</div>}
+        {item.wearCount===0 && <div style={{position:"absolute",top:8,left:8,background:"#2A1A1A",...ss(8,600,"#C4A0A0",{letterSpacing:1,padding:"3px 7px",borderRadius:10})}}>UNWORN</div>}
+        <button onClick={e=>{e.stopPropagation();onToggleFav();}} style={{position:"absolute",bottom:8,right:8,width:28,height:28,borderRadius:"50%",background:"#0D0D0D99",border:"none",display:"flex",alignItems:"center",justifyContent:"center",cursor:_p,fontSize:14,backdropFilter:"blur(4px)"}}>
+          <span style={{color:isFav?G:"#4A4038",transition:"color 0.15s"}}>{isFav?"♥":"♡"}</span>
+        </button>
+      </div>
+      <div style={{padding:"10px 12px 12px"}}>
+        <div style={sr(14,500,"#E8E0D4",{lineHeight:1.2})}>{item.name}</div>
+        <div style={{..._btwn,marginTop:3}}>
+          <div style={{..._row,gap:5}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:item.color,border:"1px solid #FFFFFF22",flexShrink:0}}/>
+            <div style={ss(9,400,DM,{letterSpacing:1})}>{item.brand}</div>
+          </div>
+          <div style={ss(9,400,DM)}>Worn {item.wearCount}x</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── HOME ─────────────────────────────────────────────────────────────────────
 // ── STORY VIEWER ─────────────────────────────────────────────────────────────
-function HomeTab({items,outfits,showToast,setTab,setWishlist,setItems}){
+function HomeTab({items,outfits,showToast,setTab,setWishlist,addToWishlist,removeFromWishlist,setItems,session,onAddToCloset}){
   const [liked,setLiked]         = useState({});
   const [activeItem,setActiveItem] = useState(null);
   const [viewProfile,setViewProfile] = useState(null);
   const [visibleCount,setVisibleCount] = useState(4);
   const [showSearch,setShowSearch] = useState(false);
   const [searchQuery,setSearchQuery] = useState("");
+  const [userResults,setUserResults] = useState([]);
+  const [searchLoading,setSearchLoading] = useState(false);
   const [selectedTrend,setSelectedTrend]=useState(null);
   const searchRef = useRef(null);
+  const searchTimer = useRef(null);
 
   const now = new Date();
   const dayName = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][now.getDay()];
@@ -1072,7 +946,9 @@ function HomeTab({items,outfits,showToast,setTab,setWishlist,setItems}){
   // Feed helpers
   const getFeedItem=(feedId,itemIdx)=>{ const f=feedItems.find(f=>f.id===feedId); return f?f.items[itemIdx]:null; };
   const handleWishlist=(item)=>{
-    setWishlist(prev=>prev.find(w=>w.name===item.name)?prev:[...prev,{id:Date.now(),emoji:item.emoji,name:item.name,brand:item.brand,price:item.price,gap:"Saved from feed",inMarket:item.forSale}]);
+    const newItem={id:Date.now(),emoji:item.emoji,name:item.name,brand:item.brand,price:item.price,gap:"Saved from feed",inMarket:item.forSale};
+    if(addToWishlist) addToWishlist(newItem);
+    else setWishlist(prev=>prev.find(w=>w.name===item.name)?prev:[...prev,newItem]);
     setActiveItem(null); showToast(item.name+" added to wishlist ❆");
   };
   const handleAddToCloset=(item)=>{
@@ -1086,15 +962,14 @@ function HomeTab({items,outfits,showToast,setTab,setWishlist,setItems}){
   };
 
   // ── Render a single community post card ──
-  const accentColors = ["#C4A882","#8A7A6A","#6A8A7A","#7A6A8A","#8A6A6A"];
   const PostCard = ({feed})=>{
-    const accentCol = accentColors[(feed.id-1)%accentColors.length];
+    const Pic = outfitPortraits[(feed.id-1)%outfitPortraits.length];
     return(
       <div style={{background:CD,borderRadius:20,overflow:"hidden",marginBottom:16,border:`1px solid ${BR}`}}>
         {/* Image */}
         <div style={{width:"100%",position:"relative",background:_1a}}>
           <div style={{width:"100%",paddingTop:"80%",position:"relative",overflow:"hidden"}}>
-            <div style={{..._abs0,background:`linear-gradient(135deg,${accentCol}22,${accentCol}44)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:48}}>{feed.items?.[0]?.emoji||"👗"}</div>
+            <div style={{..._abs0}}><Pic/></div>
           </div>
           <div style={{position:"absolute",bottom:0,left:0,right:0,height:100,background:"linear-gradient(transparent,#141414EE)"}}/>
           <div style={{position:"absolute",bottom:14,left:16,right:16}}>
@@ -1253,8 +1128,26 @@ function HomeTab({items,outfits,showToast,setTab,setWishlist,setItems}){
               <input
                 ref={searchRef}
                 value={searchQuery}
-                onChange={e=>setSearchQuery(e.target.value)}
-                placeholder="Search people, styles, brands…"
+                onChange={e=>{
+                  const q=e.target.value;
+                  setSearchQuery(q);
+                  clearTimeout(searchTimer.current);
+                  if(!q.trim()){ setUserResults([]); return; }
+                  setSearchLoading(true);
+                  searchTimer.current=setTimeout(async()=>{
+                    try{
+                      const token=session?.access_token||"";
+                      const res=await fetch(
+                        `${SB_URL}/rest/v1/profiles?or=(username.ilike.*${encodeURIComponent(q)}*,bio.ilike.*${encodeURIComponent(q)}*)&select=id,username,bio,location,style_identity&limit=10`,
+                        {headers:{"Authorization":`Bearer ${token}`,"apikey":SB_KEY}}
+                      );
+                      const data=await res.json();
+                      setUserResults(Array.isArray(data)?data.filter(u=>u.username):[]);
+                    }catch(e){ setUserResults([]); }
+                    setSearchLoading(false);
+                  },300);
+                }}
+                placeholder="Search people by username…"
                 style={{width:"100%",boxSizing:"border-box",padding:"8px 12px 8px 32px",borderRadius:12,background:CD,border:`1px solid ${BR}`,color:"inherit",outline:"none",...ss(11,400,MD)}}
               />
               {searchQuery&&<button onClick={()=>setSearchQuery("")} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:DM,cursor:_p,fontSize:13}}>✕</button>}
@@ -1266,16 +1159,12 @@ function HomeTab({items,outfits,showToast,setTab,setWishlist,setItems}){
           <div className="sc" style={{flex:1,overflowY:"auto",padding:"20px 16px"}}>
             {!searchQuery ? (
               <>
-                {/* Suggested accounts */}
                 <div style={ss(9,600,DM,{letterSpacing:1.5,marginBottom:14})}>SUGGESTED FOR YOU</div>
                 {[
                   {handle:"@minimal.edit",   name:"Maya Chen",     followers:"8.1k",  style:"Minimal · Monochrome",   mutual:2},
                   {handle:"@the.closet.co",  name:"Sofia Reyes",   followers:"31k",   style:"Quiet Luxury",           mutual:4},
                   {handle:"@jess.styles",    name:"Jessica Park",  followers:"12.4k", style:"Vintage · Casual",       mutual:1},
                   {handle:"@curated.claire", name:"Claire Dubois", followers:"4.2k",  style:"Classic · Parisian",     mutual:3},
-                  {handle:"@edit.by.nina",   name:"Nina Sato",     followers:"6.8k",  style:"Streetwear · Minimal",   mutual:2},
-                  {handle:"@the.archive",    name:"Lena Park",     followers:"19.2k", style:"Archival · Avant-garde", mutual:0},
-                  {handle:"@slow.fashion",   name:"Anya Morse",    followers:"9.1k",  style:"Sustainable · Earthy",   mutual:1},
                 ].map(acct=>(
                   <div key={acct.handle} style={{..._row,gap:12,marginBottom:16,cursor:_p}} onClick={()=>showToast(`Viewing ${acct.name} \u2746`)}>
                     <div style={{width:46,height:46,borderRadius:"50%",background:`linear-gradient(135deg,${G}33,${G}55)`,border:`1px solid ${G}44`,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -1295,35 +1184,36 @@ function HomeTab({items,outfits,showToast,setTab,setWishlist,setItems}){
               </>
             ) : (
               <>
-                {/* Live search results */}
-                {/* Matching feed users */}
-                {feedItems.filter(f=>f.user.toLowerCase().includes(searchQuery.toLowerCase())||f.outfit.toLowerCase().includes(searchQuery.toLowerCase())).map(f=>(
-                  <div key={f.id} style={{..._row,gap:12,marginBottom:16,cursor:_p}} onClick={()=>{setViewProfile(f.user);setShowSearch(false);setSearchQuery("");}}>
-                    <div style={{width:46,height:46,borderRadius:"50%",background:`linear-gradient(135deg,${G}33,${G}55)`,border:`1px solid ${G}44`,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                      <AvatarPortrait user={f.user} size={36}/>
-                    </div>
-                    <div style={{flex:1}}>
-                      <div style={ss(11,600,"#E8E0D4")}>{f.user}</div>
-                      <div style={ss(9,400,DM,{marginTop:1})}>{f.followers} followers</div>
-                    </div>
+                {searchLoading&&(
+                  <div style={{textAlign:"center",padding:"32px 0"}}>
+                    <div style={{fontSize:22,animation:"spin 1s linear infinite",display:"inline-block",marginBottom:8}}>✦</div>
+                    <div style={ss(10,400,DM)}>Searching users…</div>
                   </div>
-                ))}
-                {/* Matching items in feed */}
-                {feedItems.flatMap(f=>f.items.filter(i=>i.name.toLowerCase().includes(searchQuery.toLowerCase())||i.brand.toLowerCase().includes(searchQuery.toLowerCase())).map(i=>({...i,from:f.user}))).slice(0,5).map((item,idx)=>(
-                  <div key={idx} style={{..._row,gap:12,marginBottom:16,cursor:_p}}>
-                    <div style={{width:46,height:46,borderRadius:12,background:`linear-gradient(135deg,${item.color||"#2A2A2A"}22,${item.color||"#2A2A2A"}44)`,border:`1px solid ${BR}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>
-                      {item.emoji}
-                    </div>
-                    <div style={{flex:1}}>
-                      <div style={ss(11,600,"#E8E0D4")}>{item.name}</div>
-                      <div style={ss(9,400,DM,{marginTop:1})}>{item.brand} · seen on {item.from}</div>
-                    </div>
-                  </div>
-                ))}
-                {feedItems.filter(f=>f.user.toLowerCase().includes(searchQuery.toLowerCase())||f.outfit.toLowerCase().includes(searchQuery.toLowerCase())).length===0 &&
-                 feedItems.flatMap(f=>f.items.filter(i=>i.name.toLowerCase().includes(searchQuery.toLowerCase())||i.brand.toLowerCase().includes(searchQuery.toLowerCase()))).length===0 && (
-                  <div style={{textAlign:"center",padding:"40px 0",opacity:0.4}}>
-                    <div style={sr(15,300,DM,{fontStyle:"italic"})}>No results for "{searchQuery}"</div>
+                )}
+                {!searchLoading&&userResults.length>0&&(
+                  <>
+                    <div style={ss(9,600,DM,{letterSpacing:1.5,marginBottom:12})}>USERS</div>
+                    {userResults.map(u=>(
+                      <div key={u.id} style={{..._row,gap:12,marginBottom:14,cursor:_p,background:CD,borderRadius:14,padding:"12px 14px",border:`1px solid ${BR}`}}
+                        onClick={()=>{setViewProfile({userId:u.id,username:u.username});setShowSearch(false);setSearchQuery("");}}>
+                        <div style={{width:46,height:46,borderRadius:"50%",background:`linear-gradient(135deg,${G}33,${G}55)`,border:`1px solid ${G}44`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...ss(20,400)}}>
+                          {u.username?.[0]?.toUpperCase()||"?"}
+                        </div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={ss(13,600,"#E8E0D4")}>@{u.username}</div>
+                          {u.bio&&<div style={ss(9,400,DM,{marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"})}>{u.bio}</div>}
+                          {u.location&&<div style={ss(9,400,DM,{marginTop:1})}>📍 {u.location}</div>}
+                        </div>
+                        <div style={ss(10,400,G,{flexShrink:0})}>›</div>
+                      </div>
+                    ))}
+                  </>
+                )}
+                {!searchLoading&&userResults.length===0&&searchQuery.trim().length>=1&&(
+                  <div style={{textAlign:"center",padding:"48px 0"}}>
+                    <div style={{fontSize:32,marginBottom:12}}>🔍</div>
+                    <div style={sr(15,300,DM,{fontStyle:"italic",marginBottom:6})}>No users found for "{searchQuery}"</div>
+                    <div style={ss(9,400,DM)}>Try searching by exact username</div>
                   </div>
                 )}
               </>
@@ -1348,7 +1238,15 @@ function HomeTab({items,outfits,showToast,setTab,setWishlist,setItems}){
       )}
 
       {/* ── User profile overlay ── */}
-      {viewProfile&&<UserProfilePage handle={viewProfile} onClose={()=>setViewProfile(null)} showToast={showToast}/>}
+      {viewProfile&&<UserProfilePage
+        handle={typeof viewProfile==="string"?viewProfile:null}
+        userId={viewProfile?.userId||null}
+        username={viewProfile?.username||null}
+        session={session}
+        onClose={()=>setViewProfile(null)}
+        showToast={showToast}
+        onAddToCloset={onAddToCloset}
+      />}
 
       {/* ── Trend detail overlay ── */}
       {selectedTrend&&(
@@ -1402,12 +1300,24 @@ function HomeTab({items,outfits,showToast,setTab,setWishlist,setItems}){
 }
 
 // ── CLOSET ───────────────────────────────────────────────────────────────────
-function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlist,onSaveItem}){
+function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlist,addToWishlist,removeFromWishlist,onSaveItem}){
   const [closetView,setClosetView]=useState("closet"); // "closet" | "wishlist"
   const [filterCat,setFilterCat]=useState("All");
   const [filterSale,setFilterSale]=useState(false);
   const [sortBy,setSortBy]=useState("default");
+  const [closetSearch,setClosetSearch]=useState("");
+  const [showFilterMenu,setShowFilterMenu]=useState(false);
+  const [showSortExpanded,setShowSortExpanded]=useState(false);
+  const [showCatExpanded,setShowCatExpanded]=useState(false);
   const [showAdd,setShowAdd]=useState(false);
+  const [mName,setMName]=useState("");
+  const [mBrand,setMBrand]=useState("");
+  const [mPrice,setMPrice]=useState("");
+  const [mCat,setMCat]=useState("Tops");
+  const [mDate,setMDate]=useState("");
+  const [mCondition,setMCondition]=useState("Good");
+  const [mColor,setMColor]=useState("#C4A882");
+  const [showBrandList,setShowBrandList]=useState(false);
   const [selectedWishItem,setSelectedWishItem]=useState(null);
   const [showReverseSearch,setShowReverseSearch]=useState(false);
   const [url,setUrl]=useState("");
@@ -1420,21 +1330,38 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
   const [transcript,setTranscript]=useState("");
   const [voiceDesc,setVoiceDesc]=useState("");
   const [favorites,setFavorites]=useState(new Set([1,9]));
+  const [photoPreview,setPhotoPreview]=useState(null);
+  const [priceOverride,setPriceOverride]=useState("");
+  const [detectedItems,setDetectedItems]=useState([]);
+  const [selectedDetected,setSelectedDetected]=useState({});
   const fileRef=useRef();
+  const manualFileRef=useRef();
+  const photoOverrideRef=useRef();
   const cats=["All","Favorites","Tops","Bottoms","Dresses","Outerwear","Shoes","Accessories"];
   const filtered=(()=>{
     let base = filterCat==="All" ? items
       : filterCat==="Favorites" ? items.filter(i=>favorites.has(i.id))
       : items.filter(i=>i.category===filterCat);
     if(filterSale) base=base.filter(i=>i.forSale);
-    if(sortBy==="worn")        base=[...base].sort((a,b)=>b.wearCount-a.wearCount);
-    else if(sortBy==="price_asc")  base=[...base].sort((a,b)=>a.price-b.price);
-    else if(sortBy==="price_desc") base=[...base].sort((a,b)=>b.price-a.price);
-    else if(sortBy==="az")    base=[...base].sort((a,b)=>a.name.localeCompare(b.name));
+    if(closetSearch.trim()){
+      const q=closetSearch.toLowerCase();
+      base=base.filter(i=>
+        i.name.toLowerCase().includes(q)||
+        i.brand.toLowerCase().includes(q)||
+        i.category.toLowerCase().includes(q)||
+        (i.tags||[]).some(t=>t.toLowerCase().includes(q))
+      );
+    }
+    if(sortBy==="worn_desc")      base=[...base].sort((a,b)=>b.wearCount-a.wearCount);
+    else if(sortBy==="worn_asc")  base=[...base].sort((a,b)=>a.wearCount-b.wearCount);
+    else if(sortBy==="price_asc") base=[...base].sort((a,b)=>a.price-b.price);
+    else if(sortBy==="price_desc")base=[...base].sort((a,b)=>b.price-a.price);
+    else if(sortBy==="date_new")  base=[...base].sort((a,b)=>b.id-a.id);
+    else if(sortBy==="date_old")  base=[...base].sort((a,b)=>a.id-b.id);
     return base;
   })();
-  const isFiltered = filterCat!=="All" || filterSale || sortBy!=="default";
-  const clearFilters=()=>{setFilterCat("All");setFilterSale(false);setSortBy("default");};
+  const isFiltered = filterCat!=="All" || filterSale || sortBy!=="default" || closetSearch.trim()!=="";
+  const clearFilters=()=>{setFilterCat("All");setFilterSale(false);setSortBy("default");setClosetSearch("");};
 
   const toggleFav=(e,id)=>{
     e.stopPropagation();
@@ -1448,10 +1375,7 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
 
 
 
-  const [photoPreview,setPhotoPreview]=useState(null);
-
-  const [detectedItems,setDetectedItems]=useState([]);
-  const [selectedDetected,setSelectedDetected]=useState({});
+  const setScannedItem=(item)=>{ setScanned(item); setPriceOverride(item ? String(item.price||"") : ""); };
 
   const doScan=async(file)=>{
     setScanning(true); setScanned(null); setDetectedItems([]); setSelectedDetected({});
@@ -1469,7 +1393,7 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
           const found=json.items||[];
           setScanning(false);
           if(found.length===1){
-            setScanned({...found[0],wearCount:0,lastWorn:"Never",purchaseDate:"Mar 2026",forSale:false});
+            setScannedItem({...found[0],wearCount:0,lastWorn:"Never",purchaseDate:"",forSale:false});
           } else if(found.length>1){
             setDetectedItems(found);
             // Pre-select all by default
@@ -1502,12 +1426,13 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
     // After parsing, show result
     setTimeout(()=>{
       setVoiceStage("done");
-      setScanned({name:"Double-Breasted Wool Blazer",brand:"Zara",category:"Outerwear",color:"#1E2A3A",price:120,tags:["smart","office","evening"],emoji:"🥼",wearCount:0,lastWorn:"Never",purchaseDate:"Mar 2026",condition:"Like New",forSale:false});
+      setScannedItem({name:"Double-Breasted Wool Blazer",brand:"Zara",category:"Outerwear",color:"#1E2A3A",price:120,tags:["smart","office","evening"],emoji:"🥼",wearCount:0,lastWorn:"Never",purchaseDate:"",condition:"Like New",forSale:false});
     },5000);
   };
 
   const confirmAdd=()=>{
-    const newItem={...scanned,id:Date.now(),sourceImage:photoPreview||undefined};
+    const finalPrice = priceOverride.trim() ? parseInt(priceOverride) : scanned.price;
+    const newItem={...scanned,id:Date.now(),price:finalPrice,sourceImage:photoPreview||undefined};
     setItems(prev=>[...prev,newItem]);
     if(onSaveItem) onSaveItem(newItem);
     closeAdd();
@@ -1517,14 +1442,14 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
   const confirmAddMulti=()=>{
     const toAdd=detectedItems.filter(i=>selectedDetected[i.id]);
     const now=Date.now();
-    const newItems=toAdd.map((item,idx)=>({...item,id:now+idx,wearCount:0,lastWorn:"Never",purchaseDate:"Mar 2026",forSale:false,sourceImage:photoPreview||undefined}));
+    const newItems=toAdd.map((item,idx)=>({...item,id:now+idx,wearCount:0,lastWorn:"Never",purchaseDate:"",forSale:false,sourceImage:photoPreview||undefined}));
     setItems(prev=>[...prev,...newItems]);
     if(onSaveItem) newItems.forEach(item=>onSaveItem(item));
     closeAdd();
     showToast(`${toAdd.length} item${toAdd.length>1?"s":""} added to your closet \u2746`);
   };
 
-  const closeAdd=()=>{setShowAdd(false);setScanned(null);setUrl("");setAddMode(null);setVoiceStage("idle");setTranscript("");setVoiceDesc("");setPhotoPreview(null);setDetectedItems([]);setSelectedDetected({});setDescribeResults([]);setDescribeLoading(false);};
+  const closeAdd=()=>{setShowAdd(false);setScanned(null);setUrl("");setAddMode(null);setVoiceStage("idle");setTranscript("");setVoiceDesc("");setPhotoPreview(null);setDetectedItems([]);setSelectedDetected({});setDescribeResults([]);setDescribeLoading(false);setMName("");setMBrand("");setMPrice("");setMCat("Tops");setMDate("");setMCondition("Good");setMColor("#C4A882");setShowBrandList(false);};
 
   // Waveform bars for recording animation
   const WaveBar=({delay})=>(
@@ -1567,13 +1492,13 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
       {/* ── WISHLIST VIEW ── */}
       {closetView==="wishlist"&&(
         <>
-          <div onClick={()=>setShowReverseSearch(true)} style={{background:"linear-gradient(135deg,#14101A,#1A1424)",borderRadius:16,padding:"14px 18px",border:"1px solid #2A2040",marginBottom:14,cursor:_p,display:"flex",gap:14,alignItems:"center"}}>
-            <div style={{width:40,height:40,borderRadius:12,background:"#1E1830",border:"1px solid #3A2A50",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>📸</div>
+          <div onClick={()=>setShowReverseSearch(true)} style={{background:"linear-gradient(135deg,#1A160F,#141008)",borderRadius:16,padding:"14px 18px",border:`1px solid ${G}44`,marginBottom:14,cursor:_p,display:"flex",gap:14,alignItems:"center"}}>
+            <div style={{width:40,height:40,borderRadius:12,background:`${G}22`,border:`1px solid ${G}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>+</div>
             <div style={{flex:1}}>
-              <div style={sr(14,500,"#D0C0E8")}>Screenshot to Wishlist</div>
-              <div style={ss(9,400,"#7A6898",{marginTop:2,lineHeight:1.4})}>Upload any fashion photo — AI detects and saves items.</div>
+              <div style={sr(14,500,G)}>Add to Wishlist</div>
+              <div style={ss(9,400,DM,{marginTop:2,lineHeight:1.4})}>Photo · URL · Describe · Manual</div>
             </div>
-            <div style={{...ss(16,400,"#8A70A8"),flexShrink:0}}>→</div>
+            <div style={{...ss(16,400,G),flexShrink:0}}>→</div>
           </div>
           {wishlist.length===0&&<div style={sr(14,300,"#3A3028",{fontStyle:"italic",textAlign:"center",padding:"24px 0"})}>Your wishlist is empty.<br/>Save items from the feed or Market.</div>}
           {wishlist.length>0&&(
@@ -1588,6 +1513,7 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
                         :<ItemIllustration item={item} size={80}/>
                       }
                       {item.inMarket&&<div style={{position:"absolute",top:8,right:8,background:"#1A3A1A",border:"1px solid #2A5A2A",borderRadius:8,padding:"2px 7px",...ss(7,700,"#80C880",{letterSpacing:0.8})}}>IN MARKET</div>}
+                      {item.sourceUrl&&!item.inMarket&&<div style={{position:"absolute",top:8,right:8,background:"#0D0D0DCC",borderRadius:8,padding:"2px 7px",backdropFilter:"blur(4px)",...ss(7,600,G,{letterSpacing:0.5})}}>🔗 URL</div>}
                     </div>
                     {/* Info */}
                     <div style={{padding:"10px 12px 12px"}}>
@@ -1614,45 +1540,178 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
       {closetView==="closet"&&(<>
 
       <div style={{marginBottom:12}}>
-        {/* Category chips */}
-        <div style={{display:"flex",gap:8,overflowX:"auto",marginBottom:8,paddingBottom:2}}>
-          {cats.map(c=>(
-            <button key={c} className="pb" onClick={()=>setFilterCat(c)} style={{
-              padding:"6px 14px",borderRadius:20,whiteSpace:"nowrap",
-              background:filterCat===c?G:"#1A1A1A",
-              border:filterCat===c?"none":"1px solid #222",
-              ...ss(10,filterCat===c?600:400,filterCat===c?BK:DM,{letterSpacing:1}),
-            }}>{c} {filterCat===c&&c!=="All"?`(${items.filter(i=>c==="Favorites"?favorites.has(i.id):i.category===c).length})`:""}</button>
-          ))}
+        {/* Search bar + filter hamburger */}
+        <div style={{..._row,gap:8,marginBottom:10}}>
+          <div style={{..._row,gap:10,flex:1,background:CD,border:`1px solid ${closetSearch?G+"66":BR}`,borderRadius:12,padding:"8px 14px",cursor:"text"}}
+            onClick={()=>document.getElementById("closet-search-input").focus()}>
+            <span style={{fontSize:13,opacity:0.35}}>🔍</span>
+            <input
+              id="closet-search-input"
+              value={closetSearch}
+              onChange={e=>setClosetSearch(e.target.value)}
+              placeholder="Search by name, brand, category…"
+              style={{flex:1,background:"none",border:"none",outline:"none",...ss(11,400,closetSearch?MD:DM),color:"#C0B8B0"}}
+            />
+            {closetSearch&&<button onClick={()=>setClosetSearch("")} style={{background:"none",border:"none",cursor:_p,...ss(12,400,DM)}}>✕</button>}
+          </div>
+          {/* Hamburger filter button */}
+          <button onClick={()=>setShowFilterMenu(v=>!v)} style={{
+            width:42,height:42,borderRadius:12,flexShrink:0,cursor:_p,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,
+            background:showFilterMenu||isFiltered?`${G}22`:CD,
+            border:showFilterMenu||isFiltered?`1.5px solid ${G}`:_2a,
+          }}>
+            <div style={{width:16,height:1.5,borderRadius:1,background:isFiltered?G:MD}}/>
+            <div style={{width:12,height:1.5,borderRadius:1,background:isFiltered?G:MD}}/>
+            <div style={{width:8,height:1.5,borderRadius:1,background:isFiltered?G:MD}}/>
+          </button>
         </div>
-        {/* Sort + For Sale row */}
-        <div style={{..._row,gap:8}}>
-          <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{flex:1,background:_1a,border:_2a,borderRadius:10,padding:"6px 10px",...ss(9,400,MD),color:MD,cursor:_p}}>
-            <option value="default">Sort: Default</option>
-            <option value="worn">Most Worn</option>
-            <option value="az">A – Z</option>
-            <option value="price_asc">Price: Low → High</option>
-            <option value="price_desc">Price: High → Low</option>
-          </select>
-          <button onClick={()=>setFilterSale(v=>!v)} style={{padding:"6px 14px",borderRadius:10,whiteSpace:"nowrap",background:filterSale?`${G}22`:"#1A1A1A",border:filterSale?`1px solid ${G}66`:"1px solid #2A2A2A",...ss(9,filterSale?600:400,filterSale?G:DM,{letterSpacing:1}),cursor:_p}}>FOR SALE</button>
-        </div>
+
+        {/* Filter dropdown panel */}
+        {showFilterMenu&&(
+          <div style={{background:"#0F0F0F",borderRadius:14,border:_2a,padding:"16px",marginBottom:12}}>
+            {/* Category — iOS action sheet style */}
+            <div style={{marginBottom:14}}>
+              <button onClick={()=>setShowCatExpanded(true)} style={{
+                width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
+                padding:"12px 14px",borderRadius:12,cursor:_p,
+                background:filterCat!=="All"?`${G}18`:"#141414",
+                border:filterCat!=="All"?`1.5px solid ${G}44`:"1px solid #2A2A2A",
+              }}>
+                <div style={{..._row,gap:8}}>
+                  <div style={ss(8,600,DM,{letterSpacing:1.5})}>CATEGORY</div>
+                  <div style={ss(10,500,filterCat!=="All"?G:MD)}>{filterCat}</div>
+                </div>
+                <div style={ss(10,400,DM)}>›</div>
+              </button>
+            </div>
+
+            {/* iOS action sheet for category */}
+            {showCatExpanded&&(
+              <div onClick={()=>setShowCatExpanded(false)} style={{..._fix,inset:0,background:"#000000AA",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-start",padding:"80px 8px 8px"}}>
+                <div onClick={e=>e.stopPropagation()}>
+                  <div style={{background:"#2C2C2E",borderRadius:14,overflow:"hidden",marginBottom:8}}>
+                    <div style={{padding:"12px 16px 8px",textAlign:"center"}}>
+                      <div style={ss(13,500,"#8E8E93")}>Category</div>
+                    </div>
+                    {cats.map((c,i)=>(
+                      <div key={c}>
+                        {i>0&&<div style={{height:1,background:"#3A3A3C",marginLeft:16}}/>}
+                        <button onClick={()=>{setFilterCat(c);setShowCatExpanded(false);}} style={{
+                          width:"100%",padding:"14px 16px",background:"none",border:"none",
+                          display:"flex",alignItems:"center",justifyContent:"space-between",
+                          cursor:_p,
+                        }}>
+                          <span style={{...ss(17,filterCat===c?500:400,"#FFFFFF"),fontFamily:"system-ui,-apple-system,sans-serif"}}>{c}</span>
+                          {filterCat===c&&<span style={{color:"#C4A882",fontSize:18,fontWeight:500}}>✓</span>}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={()=>setShowCatExpanded(false)} style={{
+                    width:"100%",padding:"16px",borderRadius:14,background:"#2C2C2E",border:"none",cursor:_p,
+                  }}>
+                    <span style={{...ss(17,600,"#C4A882"),fontFamily:"system-ui,-apple-system,sans-serif"}}>Cancel</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Sort — iOS action sheet style */}
+            <div style={{marginBottom:14}}>
+              <button onClick={()=>setShowSortExpanded(true)} style={{
+                width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
+                padding:"12px 14px",borderRadius:12,cursor:_p,
+                background:sortBy!=="default"?`${G}18`:"#141414",
+                border:sortBy!=="default"?`1.5px solid ${G}44`:"1px solid #2A2A2A",
+              }}>
+                <div style={{..._row,gap:8}}>
+                  <div style={ss(8,600,DM,{letterSpacing:1.5})}>SORT BY</div>
+                  <div style={ss(10,500,sortBy!=="default"?G:MD)}>
+                    {{"default":"Default","date_new":"Date: Newest → Oldest","date_old":"Date: Oldest → Newest","worn_desc":"Worn: Most → Least","worn_asc":"Worn: Least → Most","price_desc":"Price: High → Low","price_asc":"Price: Low → High"}[sortBy]}
+                  </div>
+                </div>
+                <div style={ss(10,400,DM)}>›</div>
+              </button>
+            </div>
+
+            {/* iOS action sheet for sort — renders outside filter panel */}
+            {showSortExpanded&&(
+              <div onClick={()=>setShowSortExpanded(false)} style={{..._fix,inset:0,background:"#000000AA",zIndex:200,display:"flex",flexDirection:"column",justifyContent:"flex-start",padding:"80px 8px 8px"}}>
+                <div onClick={e=>e.stopPropagation()}>
+                  {/* Options group */}
+                  <div style={{background:"#2C2C2E",borderRadius:14,overflow:"hidden",marginBottom:8}}>
+                    <div style={{padding:"12px 16px 8px",textAlign:"center"}}>
+                      <div style={ss(13,500,"#8E8E93")}>Sort By</div>
+                    </div>
+                    {[
+                      ["default","Default"],
+                      ["date_new","Date Added: Newest → Oldest"],
+                      ["date_old","Date Added: Oldest → Newest"],
+                      ["worn_desc","Worn: Most → Least"],
+                      ["worn_asc","Worn: Least → Most"],
+                      ["price_desc","Price: High → Low"],
+                      ["price_asc","Price: Low → High"],
+                    ].map(([val,label],i,arr)=>(
+                      <div key={val}>
+                        {i>0&&<div style={{height:1,background:"#3A3A3C",marginLeft:16}}/>}
+                        <button onClick={()=>{setSortBy(val);setShowSortExpanded(false);}} style={{
+                          width:"100%",padding:"14px 16px",background:"none",border:"none",
+                          display:"flex",alignItems:"center",justifyContent:"space-between",
+                          cursor:_p,
+                        }}>
+                          <span style={{...ss(17,sortBy===val?500:400,"#FFFFFF"),fontFamily:"system-ui,-apple-system,sans-serif"}}>{label}</span>
+                          {sortBy===val&&<span style={{color:"#C4A882",fontSize:18,fontWeight:500}}>✓</span>}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Cancel button */}
+                  <button onClick={()=>setShowSortExpanded(false)} style={{
+                    width:"100%",padding:"16px",borderRadius:14,background:"#2C2C2E",border:"none",
+                    cursor:_p,
+                  }}>
+                    <span style={{...ss(17,600,"#C4A882"),fontFamily:"system-ui,-apple-system,sans-serif"}}>Cancel</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* For Sale toggle */}
+            <div style={{..._btwn}}>
+              <div style={ss(10,500,MD)}>For Sale Only</div>
+              <button onClick={()=>setFilterSale(v=>!v)} style={{
+                width:44,height:24,borderRadius:12,cursor:_p,position:"relative",
+                background:filterSale?G:"#2A2A2A",border:"none",transition:"background 0.2s",
+              }}>
+                <div style={{position:"absolute",top:2,left:filterSale?22:2,width:20,height:20,borderRadius:10,background:"#FFF",transition:"left 0.2s"}}/>
+              </button>
+            </div>
+
+            {/* Apply / Clear */}
+            <div style={{..._row,gap:8,marginTop:14}}>
+              {isFiltered&&<button onClick={()=>{clearFilters();setShowFilterMenu(false);}} style={{flex:1,padding:"8px",borderRadius:10,background:"#1A1A1A",border:"1px solid #3A2A2A",...ss(9,600,"#C09090",{letterSpacing:1}),cursor:_p}}>CLEAR ALL</button>}
+              <button onClick={()=>setShowFilterMenu(false)} style={{flex:2,padding:"8px",borderRadius:10,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,BK,{letterSpacing:1}),cursor:_p}}>APPLY</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── ADD ITEM BAR ── */}
       <div onClick={()=>setShowAdd(true)} className="ch" style={{
         display:"flex",alignItems:"center",justifyContent:"space-between",
-        padding:"10px 16px",marginBottom:14,borderRadius:12,
-        background:"linear-gradient(90deg,#1A160F,#141010)",
-        border:`1px solid ${G}33`,cursor:_p,
+        padding:"14px 18px",marginBottom:14,borderRadius:14,
+        background:`linear-gradient(135deg,#1E180A,#181410)`,
+        border:`2px solid ${G}66`,cursor:_p,
+        boxShadow:`0 0 20px ${G}18`,
       }}>
-        <div style={{..._row,gap:10}}>
-          <div style={{width:26,height:26,borderRadius:8,background:`${G}22`,border:`1px solid ${G}44`,display:"flex",alignItems:"center",justifyContent:"center",...ss(14,300,G)}}>+</div>
+        <div style={{..._row,gap:12}}>
+          <div style={{width:34,height:34,borderRadius:10,background:`${G}22`,border:`1.5px solid ${G}55`,display:"flex",alignItems:"center",justifyContent:"center",...ss(18,300,G)}}>+</div>
           <div>
-            <div style={ss(10,600,MD,{letterSpacing:1})}>ADD TO YOUR CLOSET</div>
-            <div style={ss(8,400,DM,{marginTop:1})}>Photo, URL, voice or manual entry · AI fills the details</div>
+            <div style={ss(11,700,G,{letterSpacing:1.2})}>ADD TO YOUR CLOSET</div>
+            <div style={ss(8,400,"#7A6A4A",{marginTop:2})}>Photo · URL · Voice · Manual · AI fills details</div>
           </div>
         </div>
-        <div style={ss(18,300,"#3A3028")}>›</div>
+        <div style={{...ss(20,300,G),opacity:0.6}}>›</div>
       </div>
 
       {filtered.length===0?(
@@ -1666,29 +1725,13 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
         {filtered.map(item=>{
           const isFav=favorites.has(item.id);
           return(
-          <div key={item.id} className="ch" onClick={()=>setSelectedItem(item)} style={{background:CD,borderRadius:16,overflow:"hidden",border:`1px solid ${BR}`,position:"relative"}}>
-            <div style={{height:120,background:`linear-gradient(135deg,${item.color}22,${item.color}55)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:44,position:"relative",overflow:"hidden"}}>
-              {item.sourceImage
-                ? <img src={item.sourceImage} style={{width:"100%",height:"100%",objectFit:"cover"}} alt={item.name}/>
-                : <ItemIllustration item={item} size={80}/>
-              }
-              {item.forSale && <div style={{position:"absolute",top:8,right:8,background:G,color:BK,...ss(8,700,BK,{letterSpacing:1,padding:"3px 7px",borderRadius:10})}}>FOR SALE</div>}
-              {item.wearCount===0 && <div style={{position:"absolute",top:8,left:8,background:"#2A1A1A",...ss(8,600,"#C4A0A0",{letterSpacing:1,padding:"3px 7px",borderRadius:10})}}>UNWORN</div>}
-              <button onClick={e=>toggleFav(e,item.id)} style={{position:"absolute",bottom:8,right:8,width:28,height:28,borderRadius:"50%",background:"#0D0D0D99",border:"none",display:"flex",alignItems:"center",justifyContent:"center",cursor:_p,fontSize:14,backdropFilter:"blur(4px)"}}>
-                <span style={{color:isFav?G:"#4A4038",transition:"color 0.15s"}}>{isFav?"♥":"♡"}</span>
-              </button>
-            </div>
-            <div style={{padding:"10px 12px 12px"}}>
-              <div style={sr(14,500,"#E8E0D4",{lineHeight:1.2})}>{item.name}</div>
-              <div style={{..._btwn,marginTop:3}}>
-                <div style={{..._row,gap:5}}>
-                  <div style={{width:8,height:8,borderRadius:"50%",background:item.color,border:"1px solid #FFFFFF22",flexShrink:0}}/>
-                  <div style={ss(9,400,DM,{letterSpacing:1})}>{item.brand}</div>
-                </div>
-                <div style={ss(9,400,DM)}>Worn {item.wearCount}x</div>
-              </div>
-            </div>
-          </div>
+            <ClosetItemCard
+              key={item.id}
+              item={item}
+              isFav={isFav}
+              onSelect={()=>setSelectedItem(item)}
+              onToggleFav={()=>toggleFav({stopPropagation:()=>{}},item.id)}
+            />
           );
         })}
       </div>
@@ -1740,34 +1783,36 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
                       if(!url.trim()) return;
                       setScanning(true); setScanned(null);
                       try{
-                        // Fetch item details and product image in parallel
-                        const [raw, imgRes] = await Promise.all([
+                        // Fetch AI item details and real price/image from scraper in parallel
+                        const [raw, productRes] = await Promise.all([
                           callClaude(
                             `A user pasted this product URL into a wardrobe app: "${url}"\n\nUsing the URL structure, domain, and any readable slug/path, identify the clothing item as accurately as possible. Infer the brand from the domain, the item name and category from the path, and estimate a realistic retail price. Return ONLY JSON: {"name":"...","brand":"...","category":"Tops|Bottoms|Dresses|Outerwear|Shoes|Accessories","color":"#hexcode","price":150,"tags":["..."],"emoji":"👚","condition":"Like New"}`
                           ),
-                          fetch("/api/fetch-image", {
+                          fetch("/api/fetch-product", {
                             method:"POST",
                             headers:{"Content-Type":"application/json"},
                             body:JSON.stringify({url:url.trim()})
-                          }).then(r=>r.json()).catch(()=>({imageUrl:null}))
+                          }).then(r=>r.json()).catch(()=>({price:null,image:null}))
                         ]);
                         const json=JSON.parse(raw.replace(/```json|```/g,"").trim());
+                        // Use real scraped price if available, otherwise keep AI estimate
+                        const finalPrice = productRes.price || json.price;
                         setScanning(false);
-                        setScanned({...json,wearCount:0,lastWorn:"Never",purchaseDate:"Mar 2026",forSale:false,sourceImage:imgRes.imageUrl||null});
+                        setScannedItem({...json,price:finalPrice,wearCount:0,lastWorn:"Never",purchaseDate:"",forSale:false,sourceImage:productRes.image||null});
                       }catch(e){
                         setScanning(false);
-                        setScanned({name:"Unknown Item",brand:"Unknown",category:"Tops",color:"#C4A882",price:0,tags:[],emoji:"👚",wearCount:0,lastWorn:"Never",purchaseDate:"Mar 2026",condition:"Like New",forSale:false});
+                        setScannedItem({name:"Unknown Item",brand:"Unknown",category:"Tops",color:"#C4A882",price:0,tags:[],emoji:"👚",wearCount:0,lastWorn:"Never",purchaseDate:"",condition:"Like New",forSale:false});
                       }
-                    }} style={{padding:"10px 16px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,...ss(9,600,BK,{letterSpacing:1}),cursor:_p,border:"none"}}>FETCH</button>
+                    }} style={{padding:"10px 16px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,...ss(9,600,BK,{letterSpacing:1}),cursor:_p,border:"none"}}>FIND</button>
                   </div>
                 </div>
 
-                {/* Describe option — full width */}
+                {/* Describe option */}
                 <button className="sb" onClick={()=>setAddMode("describe")} style={{
                   width:"100%",padding:"16px",borderRadius:14,
                   background:"linear-gradient(135deg,#1A1424,#120E1C)",
                   border:"1px solid #2A2040",
-                  display:"flex",alignItems:"center",gap:14,cursor:_p,
+                  display:"flex",alignItems:"center",gap:14,cursor:_p,marginBottom:10,
                 }}>
                   <div style={{width:44,height:44,borderRadius:12,background:"#2A2040",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:22}}>🎙️</div>
                   <div style={{textAlign:"left"}}>
@@ -1775,6 +1820,21 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
                     <div style={ss(8,400,"#6A5A88",{marginTop:3})}>Speak or type · AI identifies brand, category & details</div>
                   </div>
                   <div style={{marginLeft:"auto",...ss(14,300,"#3A2A58")}}>›</div>
+                </button>
+
+                {/* Manual entry option */}
+                <button className="sb" onClick={()=>setAddMode("manual")} style={{
+                  width:"100%",padding:"16px",borderRadius:14,
+                  background:"linear-gradient(135deg,#0F1A14,#0C150F)",
+                  border:"1px solid #1E3028",
+                  display:"flex",alignItems:"center",gap:14,cursor:_p,
+                }}>
+                  <div style={{width:44,height:44,borderRadius:12,background:"#1A3020",border:"1px solid #2A4030",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:22}}>✏️</div>
+                  <div style={{textAlign:"left"}}>
+                    <div style={ss(10,600,"#80C8A0",{letterSpacing:1})}>ADD MANUALLY</div>
+                    <div style={ss(8,400,"#3A6048",{marginTop:3})}>Fill in all details yourself</div>
+                  </div>
+                  <div style={{marginLeft:"auto",...ss(14,300,"#2A4030")}}>›</div>
                 </button>
               </>
             )}
@@ -1798,17 +1858,17 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
                     setDescribeLoading(true); setDescribeResults([]);
                     try{
                       const raw = await callClaude(
-                        `A user is describing a clothing item they want to add to their wardrobe app: "${voiceDesc}"\n\nGenerate 4 specific product matches they might be describing. Return ONLY JSON:\n{"results":[{"name":"...","brand":"...","category":"Tops|Bottoms|Dresses|Outerwear|Shoes|Accessories","color":"#hexcode","price":150,"emoji":"👚","condition":"New","tags":["..."]},...]}`
+                        `A user is describing a clothing item they want to add to their wardrobe app: "${voiceDesc}"\n\nGenerate 4 specific product matches with exact brand names and product names they might be describing. Return ONLY JSON:\n{"results":[{"name":"...","brand":"...","category":"Tops|Bottoms|Dresses|Outerwear|Shoes|Accessories","color":"#hexcode","price":150,"emoji":"👚","condition":"New","tags":["..."]},...]}`
                       );
                       const json=JSON.parse(raw.replace(/```json|```/g,"").trim());
                       const results = json.results||[];
-                      // Fetch real images via Google Custom Search in parallel
+                      // Fetch real product images via Google Image Search in parallel
                       const withImages = await Promise.all(results.map(async r=>{
                         try{
                           const imgRes = await fetch("/api/image-search",{
                             method:"POST",
                             headers:{"Content-Type":"application/json"},
-                            body:JSON.stringify({query:`${r.brand} ${r.name} product photo`})
+                            body:JSON.stringify({query:`${r.brand} ${r.name} official product photo white background`})
                           }).then(x=>x.json()).catch(()=>({imageUrl:null}));
                           return {...r, imageUrl:imgRes.imageUrl||null};
                         }catch(e){ return {...r, imageUrl:null}; }
@@ -1835,7 +1895,7 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
                     <div style={{display:"flex",flexDirection:"column",gap:10}}>
                       {describeResults.map((r,i)=>(
                         <div key={i} onClick={()=>{
-                          setScanned({...r,wearCount:0,lastWorn:"Never",purchaseDate:"Mar 2026",forSale:false,sourceImage:r.imageUrl||null});
+                          setScannedItem({...r,wearCount:0,lastWorn:"Never",purchaseDate:"",forSale:false,sourceImage:r.imageUrl||null});
                           setDescribeResults([]);
                         }}
                           className="ch" style={{background:CD,borderRadius:16,border:`1px solid ${BR}`,display:"flex",gap:12,padding:"12px",cursor:_p,alignItems:"center"}}>
@@ -1869,12 +1929,150 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
               </div>
             )}
 
+            {/* ── MANUAL ENTRY MODE ── */}
+            {addMode==="manual" && !scanned && (
+              <div style={{marginTop:16}}>
+                {(()=>{
+                  const catList=["Tops","Bottoms","Dresses","Outerwear","Shoes","Accessories"];
+                  const condList=["Like New","Excellent","Good","Fair"];
+                  const catEmoji={Tops:"👕",Bottoms:"👖",Dresses:"👗",Outerwear:"🧥",Shoes:"👟",Accessories:"✨"};
+                  const colorSwatches=[
+                    {name:"White",   hex:"#F5F5F5"},
+                    {name:"Cream",   hex:"#F5F0E8"},
+                    {name:"Yellow",  hex:"#F0C040"},
+                    {name:"Orange",  hex:"#E07830"},
+                    {name:"Red",     hex:"#C03030"},
+                    {name:"Pink",    hex:"#E88090"},
+                    {name:"Purple",  hex:"#8060A0"},
+                    {name:"Blue",    hex:"#3060A0"},
+                    {name:"Sky",     hex:"#60A0D0"},
+                    {name:"Green",   hex:"#407840"},
+                    {name:"Olive",   hex:"#6A7040"},
+                    {name:"Tan",     hex:"#C4A882"},
+                    {name:"Brown",   hex:"#7A5030"},
+                    {name:"Grey",    hex:"#808080"},
+                    {name:"Charcoal",hex:"#3A3A3A"},
+                    {name:"Black",   hex:"#1A1A1A"},
+                  ];
+                  const iStyle={width:"100%",boxSizing:"border-box",background:"#0D0D0D",border:"1px solid #2A2A2A",borderRadius:10,padding:"10px 14px",...ss(12,400,MD),color:"#C0B8B0",outline:"none"};
+                  const confirmManual=()=>{
+                    if(!mName.trim()){showToast("Please enter an item name \u2746");return;}
+                    const emoji={Tops:"👚",Bottoms:"👖",Dresses:"👗",Outerwear:"🧥",Shoes:"👟",Accessories:"✨"}[mCat]||"👗";
+                    setScannedItem({name:mName.trim(),brand:mBrand.trim()||"Unknown",category:mCat,color:mColor,price:parseInt(mPrice)||0,tags:[],emoji,condition:mCondition,wearCount:0,lastWorn:"Never",purchaseDate:mDate,forSale:false,sourceImage:null});
+                  };
+                  return(
+                    <>
+                      {/* Photo upload */}
+                      <div style={{marginBottom:14}}>
+                        <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:8})}>PHOTO (OPTIONAL)</div>
+                        <input ref={manualFileRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{if(e.target.files[0]){const r=new FileReader();r.onload=ev=>setPhotoPreview(ev.target.result);r.readAsDataURL(e.target.files[0]);}}}/>
+                        {photoPreview ? (
+                          <div style={{position:"relative",borderRadius:14,overflow:"hidden",height:140,background:_1a}}>
+                            <img src={photoPreview} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="preview"/>
+                            <button onClick={()=>setPhotoPreview(null)} style={{position:"absolute",top:8,right:8,width:28,height:28,borderRadius:"50%",background:"#0D0D0D99",border:"none",cursor:_p,...ss(14,400,"#F0EBE3"),display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+                          </div>
+                        ) : (
+                          <button onClick={()=>manualFileRef.current.click()} style={{width:"100%",padding:"16px",borderRadius:14,background:_1a,border:`1px dashed ${G}44`,display:"flex",alignItems:"center",gap:12,cursor:_p}}>
+                            <div style={{width:40,height:40,borderRadius:10,background:`${G}18`,border:`1px solid ${G}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>📷</div>
+                            <div style={{textAlign:"left"}}>
+                              <div style={ss(10,600,G,{letterSpacing:0.5})}>UPLOAD PHOTO</div>
+                              <div style={ss(8,400,DM,{marginTop:2})}>Take a photo or choose from library</div>
+                            </div>
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={{marginBottom:12}}>
+                        <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>ITEM NAME *</div>
+                        <input value={mName} onChange={e=>setMName(e.target.value)} placeholder="e.g. Silk Ivory Blouse" style={iStyle}/>
+                      </div>
+                      <div style={{marginBottom:12,position:"relative"}}>
+                        <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>BRAND</div>
+                        <input
+                          value={mBrand}
+                          onChange={e=>{setMBrand(e.target.value);setShowBrandList(true);}}
+                          onFocus={()=>{if(mBrand.length>=1) setShowBrandList(true);}}
+                          onBlur={()=>setTimeout(()=>setShowBrandList(false),150)}
+                          placeholder="e.g. Aritzia, Zara…"
+                          style={iStyle}
+                          autoComplete="off"
+                        />
+                        {showBrandList&&mBrand.length>=1&&(()=>{
+                          const q=mBrand.toLowerCase();
+                          const matches=FASHION_BRANDS.filter(b=>b.toLowerCase().startsWith(q)||b.toLowerCase().includes(q)).slice(0,6);
+                          return matches.length>0?(
+                            <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"#1A1A1A",borderRadius:"0 0 10px 10px",border:`1px solid ${G}44`,borderTop:"none",overflow:"hidden"}}>
+                              {matches.map((b,i)=>(
+                                <div key={b} onMouseDown={()=>{setMBrand(b);setShowBrandList(false);}}
+                                  style={{padding:"10px 14px",cursor:_p,borderTop:i>0?"1px solid #2A2A2A":"none",display:"flex",alignItems:"center",gap:10,...ss(12,400,MD)}}
+                                  className="ch">
+                                  <span style={{fontSize:12,opacity:0.4}}>✦</span>
+                                  <span>{b}</span>
+                                  {b.toLowerCase().startsWith(q)&&<span style={ss(9,400,DM,{marginLeft:"auto"})}>brand</span>}
+                                </div>
+                              ))}
+                            </div>
+                          ):null;
+                        })()}
+                      </div>
+                      <div style={{marginBottom:12}}>
+                        <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>PRICE ($)</div>
+                        <input value={mPrice} onChange={e=>setMPrice(e.target.value.replace(/\D/g,""))} placeholder="0" inputMode="numeric" style={iStyle}/>
+                      </div>
+
+                      {/* Color swatches */}
+                      <div style={{marginBottom:12}}>
+                        <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:8})}>COLOR</div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                          {colorSwatches.map(({name,hex})=>(
+                            <button key={hex} onClick={()=>setMColor(hex)} title={name} style={{
+                              width:32,height:32,borderRadius:"50%",background:hex,cursor:_p,
+                              border:mColor===hex?`3px solid ${G}`:"2px solid #2A2A2A",
+                              boxShadow:mColor===hex?`0 0 0 2px ${G}66`:"none",
+                              flexShrink:0,transition:"all 0.15s",
+                              outline:"none",
+                            }}/>
+                          ))}
+                        </div>
+                        <div style={{...ss(9,400,DM,{marginTop:6})}}>Selected: <span style={{color:G}}>{colorSwatches.find(c=>c.hex===mColor)?.name||"Custom"}</span></div>
+                      </div>
+
+                      <div style={{marginBottom:12}}>
+                        <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:8})}>CATEGORY</div>
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                          {catList.map(c=>(
+                            <button key={c} onClick={()=>setMCat(c)} style={{padding:"6px 12px",borderRadius:20,cursor:_p,background:mCat===c?`${G}22`:_1a,border:mCat===c?`1.5px solid ${G}`:`1px solid #2A2A2A`,...ss(9,mCat===c?600:400,mCat===c?G:DM),display:"flex",alignItems:"center",gap:4}}>
+                              <span>{catEmoji[c]}</span>{c}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{marginBottom:12}}>
+                        <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:8})}>CONDITION</div>
+                        <div style={{display:"flex",gap:6}}>
+                          {condList.map(c=>(
+                            <button key={c} onClick={()=>setMCondition(c)} style={{flex:1,padding:"7px 4px",borderRadius:10,cursor:_p,background:mCondition===c?`${G}22`:_1a,border:mCondition===c?`1.5px solid ${G}`:`1px solid #2A2A2A`,...ss(8,mCondition===c?600:400,mCondition===c?G:DM,{letterSpacing:0.3})}}>{c}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{marginBottom:20}}>
+                        <MonthYearPicker label="DATE PURCHASED (OPTIONAL)" value={mDate} onChange={setMDate}/>
+                      </div>
+                      <button onClick={confirmManual} style={{width:"100%",padding:"13px",borderRadius:14,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,700,BK,{letterSpacing:1.5}),cursor:_p}}>
+                        PREVIEW ITEM →
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
             {/* ── SCANNING (photo/url) ── */}
             {scanning && (
               <div style={{textAlign:"center",padding:"32px 0"}}>
                 <div style={{fontSize:44,marginBottom:16,animation:"pulse 1.2s infinite"}}>🔍</div>
-                <div style={sr(16,400,G,{marginBottom:6})}>Analyzing outfit…</div>
-                <div style={ss(10,400,DM,{marginBottom:20})}>Identifying all items, brands and details</div>
+                <div style={sr(16,400,G,{marginBottom:6})}>Identifying item…</div>
+                <div style={ss(10,400,DM,{marginBottom:20})}>Recognizing brand, category & details</div>
                 <div style={{height:3,background:_1a,borderRadius:2,overflow:"hidden"}}>
                   <div style={{height:"100%",width:"70%",background:`linear-gradient(90deg,${G},#8A6E54)`,borderRadius:2,animation:"pulse 1s infinite"}} />
                 </div>
@@ -1890,19 +2088,49 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
                   {addMode==="describe"&&<span style={ss(9,400,"#4A7A4A",{marginLeft:"auto"})}>via description</span>}
                 </div>
                 <div style={{display:"flex",gap:14,marginBottom:16}}>
-                  <div style={{width:72,height:72,borderRadius:14,background:`linear-gradient(135deg,${scanned.color}22,${scanned.color}55)`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",border:_2a}}>
-                    {photoPreview
-                      ? <img src={photoPreview} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="item"/>
-                      : scanned.sourceImage
-                        ? <img src={scanned.sourceImage} style={{width:"100%",height:"100%",objectFit:"cover"}}
-                            onError={e=>{e.target.style.display="none";}} alt={scanned.name}/>
-                        : <ItemIllustration item={scanned} size={60}/>
-                    }
+                  {/* Image box with pencil edit overlay */}
+                  <div style={{position:"relative",width:72,height:72,flexShrink:0}}>
+                    <input ref={photoOverrideRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
+                      const file=e.target.files?.[0]; if(!file) return;
+                      const reader=new FileReader();
+                      reader.onload=ev=>setPhotoPreview(ev.target.result);
+                      reader.readAsDataURL(file);
+                    }}/>
+                    <div style={{width:72,height:72,borderRadius:14,background:`linear-gradient(135deg,${scanned.color}22,${scanned.color}55)`,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",border:_2a}}>
+                      {photoPreview
+                        ? <img src={photoPreview} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="item"/>
+                        : scanned.sourceImage
+                          ? <img src={scanned.sourceImage} style={{width:"100%",height:"100%",objectFit:"cover"}}
+                              onError={e=>{e.target.style.display="none";}} alt={scanned.name}/>
+                          : <ItemIllustration item={scanned} size={60}/>
+                      }
+                    </div>
+                    {/* Pencil edit button */}
+                    <button onClick={()=>photoOverrideRef.current?.click()}
+                      style={{position:"absolute",bottom:-4,right:-4,width:22,height:22,borderRadius:"50%",background:G,border:"2px solid #0D0D0D",display:"flex",alignItems:"center",justifyContent:"center",cursor:_p}}>
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                        <path d="M7 1L9 3L3.5 8.5L1 9L1.5 6.5L7 1Z" fill="#0D0D0D" stroke="#0D0D0D" strokeWidth="0.5" strokeLinejoin="round"/>
+                        <path d="M6.5 1.5L8.5 3.5" stroke="#0D0D0D" strokeWidth="0.5"/>
+                      </svg>
+                    </button>
                   </div>
                   <div>
                     <div style={sr(17,500)}>{scanned.name}</div>
                     <div style={ss(9,400,DM,{letterSpacing:1,marginTop:3})}>{scanned.brand} · {scanned.category}</div>
-                    <div style={sr(15,400,G,{marginTop:4})}>${scanned.price}</div>
+                    {/* Editable price */}
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginTop:6}}>
+                      <span style={sr(13,400,G)}>$</span>
+                      <input
+                        value={priceOverride}
+                        onChange={e=>setPriceOverride(e.target.value.replace(/\D/g,""))}
+                        inputMode="numeric"
+                        placeholder={String(scanned.price)}
+                        style={{width:72,background:"#0D0D0D",border:`1px solid ${G}55`,borderRadius:8,padding:"4px 8px",...ss(12,400,G),color:G,outline:"none"}}
+                      />
+                      {priceOverride && parseInt(priceOverride) !== scanned.price && (
+                        <span style={ss(8,400,DM,{fontStyle:"italic"})}>AI suggested ${scanned.price}</span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -2014,8 +2242,19 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
                 ?<div style={{background:"#1A2A1A",borderRadius:20,padding:"4px 12px",...ss(8,700,"#A8C4A0",{letterSpacing:1})}}>IN MARKET</div>
                 :<div style={{background:_1a,borderRadius:20,padding:"4px 12px",border:_2a,...ss(8,400,DM,{letterSpacing:1})}}>NOT LISTED</div>}
             </div>
+            {selectedWishItem.sourceUrl&&(
+              <a href={selectedWishItem.sourceUrl} target="_blank" rel="noopener noreferrer"
+                style={{display:"flex",alignItems:"center",gap:10,background:"#0A0A14",borderRadius:14,padding:"12px 16px",marginBottom:16,border:`1px solid ${G}33`,textDecoration:"none",cursor:_p}}>
+                <div style={{width:32,height:32,borderRadius:10,background:`${G}22`,border:`1px solid ${G}44`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...ss(14,400)}}>🔗</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={ss(9,600,G,{letterSpacing:1,marginBottom:2})}>VIEW ORIGINAL LISTING</div>
+                  <div style={ss(9,400,DM,{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"})}>{selectedWishItem.sourceUrl.replace(/^https?:\/\//,"").slice(0,50)}{selectedWishItem.sourceUrl.length>53?"…":""}</div>
+                </div>
+                <div style={ss(12,400,G)}>↗</div>
+              </a>
+            )}
             <div style={{display:"flex",gap:10}}>
-              <Btn onClick={()=>{setWishlist(prev=>prev.filter(w=>w.id!==selectedWishItem.id));setSelectedWishItem(null);showToast("Removed from wishlist \u2746");}} outline>REMOVE</Btn>
+              <Btn onClick={()=>{if(removeFromWishlist) removeFromWishlist(selectedWishItem.id); else setWishlist(prev=>prev.filter(w=>w.id!==selectedWishItem.id));setSelectedWishItem(null);showToast("Removed from wishlist \u2746");}} outline>REMOVE</Btn>
               <Btn onClick={()=>{showToast("Finding in market\u2026 \u2746");setSelectedWishItem(null);}} full>FIND IN MARKET</Btn>
             </div>
           </div>
@@ -2024,13 +2263,11 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
 
       {/* ── REVERSE SEARCH MODAL ── */}
       {showReverseSearch&&(
-        <ReverseSearchModal
+        <WishlistAddModal
           onClose={()=>setShowReverseSearch(false)}
           onAddToWishlist={(item)=>{
-            setWishlist(prev=>{
-              if(prev.find(w=>w.name===item.name)) return prev;
-              return [...prev,{id:Date.now()+Math.random(),emoji:item.emoji,name:item.name,brand:item.brand,price:item.price,gap:"Found via image search",inMarket:item.inMarket,sourceImage:item.sourceImage}];
-            });
+            if(addToWishlist) addToWishlist({...item, id:item.id||Date.now()+Math.random()});
+            else setWishlist(prev=>prev.find(w=>w.name===item.name)?prev:[...prev,{...item,id:item.id||Date.now()+Math.random()}]);
           }}
         />
       )}
@@ -2039,9 +2276,230 @@ function ClosetTab({items,setItems,setSelectedItem,showToast,wishlist,setWishlis
 }
 
 // ── ITEM DETAIL ───────────────────────────────────────────────────────────────
-function ItemDetail({item,onClose,onAddToOutfit,showToast,onRemove}){
+// ── CROP MODAL ────────────────────────────────────────────────────────────────
+function CropModal({src, onCancel, onSave}){
+  const canvasRef=useRef();
+  const [cropX,setCropX]=useState(0);
+  const [cropY,setCropY]=useState(0);
+  const [cropSize,setCropSize]=useState(200);
+  const [imgNatural,setImgNatural]=useState({w:1,h:1});
+  const [displaySize,setDisplaySize]=useState({w:320,h:320});
+  const [dragging,setDragging]=useState(false);
+  const [dragStart,setDragStart]=useState({x:0,y:0,cx:0,cy:0});
+  const containerRef=useRef();
+  const imgRef=useRef();
+
+  useEffect(()=>{
+    const img=new Image();
+    img.onload=()=>{
+      const nat={w:img.naturalWidth,h:img.naturalHeight};
+      setImgNatural(nat);
+      const maxW=Math.min(window.innerWidth-48,380);
+      const maxH=420;
+      // Use contain logic: fit image within maxW x maxH preserving aspect ratio
+      const scaleToFit=Math.min(maxW/nat.w, maxH/nat.h);
+      const dispW=Math.round(nat.w*scaleToFit);
+      const dispH=Math.round(nat.h*scaleToFit);
+      setDisplaySize({w:dispW,h:dispH});
+      const initSize=Math.min(dispW,dispH)*0.7;
+      setCropSize(initSize);
+      setCropX((dispW-initSize)/2);
+      setCropY((dispH-initSize)/2);
+    };
+    img.src=src;
+  },[src]);
+
+  const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+
+  const onTouchStart=e=>{
+    const t=e.touches[0];
+    setDragging(true);
+    setDragStart({x:t.clientX,y:t.clientY,cx:cropX,cy:cropY});
+  };
+  const onTouchMove=e=>{
+    if(!dragging) return;
+    e.preventDefault();
+    const t=e.touches[0];
+    const dx=t.clientX-dragStart.x;
+    const dy=t.clientY-dragStart.y;
+    setCropX(clamp(dragStart.cx+dx,0,displaySize.w-cropSize));
+    setCropY(clamp(dragStart.cy+dy,0,displaySize.h-cropSize));
+  };
+  const onTouchEnd=()=>setDragging(false);
+
+  // Pinch to resize
+  const lastPinch=useRef(null);
+  const onTouchStartPinch=e=>{
+    if(e.touches.length===2){
+      const dx=e.touches[0].clientX-e.touches[1].clientX;
+      const dy=e.touches[0].clientY-e.touches[1].clientY;
+      lastPinch.current=Math.sqrt(dx*dx+dy*dy);
+    } else onTouchStart(e);
+  };
+  const onTouchMovePinch=e=>{
+    if(e.touches.length===2 && lastPinch.current){
+      e.preventDefault();
+      const dx=e.touches[0].clientX-e.touches[1].clientX;
+      const dy=e.touches[0].clientY-e.touches[1].clientY;
+      const dist=Math.sqrt(dx*dx+dy*dy);
+      const delta=dist-lastPinch.current;
+      lastPinch.current=dist;
+      setCropSize(prev=>{
+        const next=clamp(prev+delta*0.8,60,Math.min(displaySize.w,displaySize.h));
+        // Keep crop within bounds
+        setCropX(cx=>clamp(cx,0,displaySize.w-next));
+        setCropY(cy=>clamp(cy,0,displaySize.h-next));
+        return next;
+      });
+    } else onTouchMove(e);
+  };
+
+  const applyCrop=async()=>{
+    const canvas=document.createElement("canvas");
+    const outputSize=600;
+    canvas.width=outputSize; canvas.height=outputSize;
+    const ctx=canvas.getContext("2d");
+
+    // Convert remote URL to base64 first to avoid CORS canvas taint
+    let imgSrc=src;
+    if(src && !src.startsWith("data:")){
+      try{
+        const blob=await fetch(src).then(r=>r.blob());
+        imgSrc=await new Promise(res=>{ const r=new FileReader(); r.onload=e=>res(e.target.result); r.readAsDataURL(blob); });
+      }catch(e){ imgSrc=src; } // fall back to direct src
+    }
+
+    const img=new Image();
+    img.crossOrigin="anonymous";
+    img.onload=()=>{
+      try{
+        // With objectFit:contain the display is scaled uniformly — use single scale factor
+        const scale=imgNatural.w/displaySize.w; // same as imgNatural.h/displaySize.h
+        const sx=Math.round(cropX*scale);
+        const sy=Math.round(cropY*scale);
+        const sw=Math.round(cropSize*scale);
+        const sh=Math.round(cropSize*scale);
+        ctx.drawImage(img,sx,sy,sw,sh,0,0,outputSize,outputSize);
+        onSave(canvas.toDataURL("image/jpeg",0.9));
+      }catch(e){
+        // Canvas tainted — save original src unchanged
+        onSave(src);
+      }
+    };
+    img.onerror=()=>onSave(src); // can't crop, save as-is
+    img.src=imgSrc;
+  };
+
+  return(
+    <div style={{..._fix,inset:0,background:"#000000EE",zIndex:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"0 24px"}}>
+      <div style={{width:"100%",maxWidth:430}}>
+        {/* Header */}
+        <div style={{..._btwn,marginBottom:14}}>
+          <div style={sr(18,400)}>Crop Photo</div>
+          <div style={ss(9,400,DM)}>Drag to move · Pinch to resize</div>
+        </div>
+
+        {/* Image + crop overlay */}
+        <div ref={containerRef} style={{position:"relative",width:displaySize.w,height:displaySize.h,margin:"0 auto",borderRadius:12,overflow:"hidden",cursor:"move",touchAction:"none"}}
+          onTouchStart={onTouchStartPinch} onTouchMove={onTouchMovePinch} onTouchEnd={onTouchEnd}
+          onMouseDown={e=>{setDragging(true);setDragStart({x:e.clientX,y:e.clientY,cx:cropX,cy:cropY});}}
+          onMouseMove={e=>{if(!dragging) return; const dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y; setCropX(clamp(dragStart.cx+dx,0,displaySize.w-cropSize)); setCropY(clamp(dragStart.cy+dy,0,displaySize.h-cropSize));}}
+          onMouseUp={()=>setDragging(false)}
+        >
+          <img ref={imgRef} src={src} style={{width:displaySize.w,height:displaySize.h,objectFit:"contain",display:"block",userSelect:"none",pointerEvents:"none"}} alt="crop"/>
+          {/* Dark overlay with cut-out */}
+          <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width={displaySize.w} height={displaySize.h}>
+            <defs>
+              <mask id="cropMask">
+                <rect width={displaySize.w} height={displaySize.h} fill="white"/>
+                <rect x={cropX} y={cropY} width={cropSize} height={cropSize} rx="4" fill="black"/>
+              </mask>
+            </defs>
+            <rect width={displaySize.w} height={displaySize.h} fill="#000000AA" mask="url(#cropMask)"/>
+            {/* Crop border */}
+            <rect x={cropX} y={cropY} width={cropSize} height={cropSize} rx="4" fill="none" stroke={G} strokeWidth="2"/>
+            {/* Rule of thirds grid */}
+            {[1,2].map(n=>(
+              <g key={n}>
+                <line x1={cropX+cropSize*n/3} y1={cropY} x2={cropX+cropSize*n/3} y2={cropY+cropSize} stroke="#FFFFFF44" strokeWidth="0.5"/>
+                <line x1={cropX} y1={cropY+cropSize*n/3} x2={cropX+cropSize} y2={cropY+cropSize*n/3} stroke="#FFFFFF44" strokeWidth="0.5"/>
+              </g>
+            ))}
+            {/* Corner handles */}
+            {[[0,0],[1,0],[0,1],[1,1]].map(([hx,hy])=>(
+              <rect key={`${hx}${hy}`}
+                x={cropX+(hx*cropSize)-6} y={cropY+(hy*cropSize)-6}
+                width={12} height={12} rx={3} fill={G}/>
+            ))}
+          </svg>
+        </div>
+
+        {/* Size slider */}
+        <div style={{marginTop:16,marginBottom:20}}>
+          <div style={ss(9,400,DM,{letterSpacing:1,marginBottom:8,textAlign:"center"})}>DRAG TO POSITION · PINCH OR SLIDE TO RESIZE</div>
+          <input type="range" min={60} max={Math.min(displaySize.w,displaySize.h)}
+            value={cropSize}
+            onChange={e=>{
+              const s=parseInt(e.target.value);
+              setCropSize(s);
+              setCropX(cx=>clamp(cx,0,displaySize.w-s));
+              setCropY(cy=>clamp(cy,0,displaySize.h-s));
+            }}
+            style={{width:"100%",accentColor:G}}
+          />
+        </div>
+
+        {/* Actions */}
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onCancel} style={{flex:1,padding:"13px",borderRadius:14,background:"#1A1A1A",border:"1px solid #2A2A2A",...ss(10,600,DM,{letterSpacing:1}),cursor:_p}}>CANCEL</button>
+          <button onClick={applyCrop} style={{flex:2,padding:"13px",borderRadius:14,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,700,BK,{letterSpacing:1.5}),cursor:_p}}>APPLY CROP</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ItemDetail({item,onClose,onAddToOutfit,showToast,onRemove,onUpdate}){
   const [activePair,setActivePair]=useState(null);
+  const [editing,setEditing]=useState(false);
+  const [editName,setEditName]=useState("");
+  const [editPrice,setEditPrice]=useState("");
+  const [editDate,setEditDate]=useState("");
+  const [editCategory,setEditCategory]=useState("");
+  const [editBrand,setEditBrand]=useState("");
+  const [editImage,setEditImage]=useState(null);
+  const [cropSrc,setCropSrc]=useState(null); // image waiting to be cropped
+  const imgRef=useRef();
+
   if(!item) return null;
+
+  const categories=["Tops","Bottoms","Dresses","Outerwear","Shoes","Accessories"];
+  const categoryEmoji={Tops:"👕",Bottoms:"👖",Dresses:"👗",Outerwear:"🧥",Shoes:"👟",Accessories:"✨"};
+
+  const openEdit=()=>{
+    setEditName(item.name);
+    setEditPrice(String(item.price));
+    setEditDate(item.purchaseDate||"");
+    setEditCategory(item.category||"Tops");
+    setEditBrand(item.brand||"");
+    setEditImage(item.sourceImage||null);
+    setEditing(true);
+  };
+
+  const saveEdit=()=>{
+    const updated={
+      ...item,
+      name: editName.trim()||item.name,
+      brand: editBrand.trim()||item.brand,
+      price: parseInt(editPrice)||item.price,
+      purchaseDate: editDate||item.purchaseDate,
+      category: editCategory||item.category,
+      sourceImage: editImage,
+    };
+    if(onUpdate) onUpdate(updated);
+    setEditing(false);
+    showToast("Changes saved \u2746");
+  };
 
   const pairingMap={Tops:["Bottoms","Shoes","Outerwear"],Bottoms:["Tops","Shoes","Accessories"],Dresses:["Shoes","Outerwear","Accessories"],Outerwear:["Tops","Bottoms","Shoes"],Shoes:["Bottoms","Dresses","Tops"],Accessories:["Tops","Dresses","Outerwear"]};
   const tipMap={
@@ -2054,89 +2512,199 @@ function ItemDetail({item,onClose,onAddToOutfit,showToast,onRemove}){
   };
   const catIcon={Tops:"👕",Bottoms:"👖",Shoes:"👟",Dresses:"👗",Outerwear:"🧥",Accessories:"✨"};
   const pairCats=pairingMap[item.category]||["Tops","Bottoms","Shoes"];
+
+  const inputStyle={width:"100%",boxSizing:"border-box",background:"#0D0D0D",border:`1px solid ${G}44`,borderRadius:10,padding:"10px 14px",...ss(12,400,"#C0B8B0"),color:"#C0B8B0",outline:"none"};
+
   return(
     <div onClick={onClose} style={{..._fix,background:"#00000099",display:"flex",alignItems:"flex-start",paddingTop:60,zIndex:80}}>
       <div onClick={e=>e.stopPropagation()} style={{background:CD,borderRadius:"0 0 24px 24px",padding:"24px",width:"100%",maxWidth:430,margin:"0 auto",border:_2a,animation:"fadeDown 0.3s ease forwards",maxHeight:"90vh",overflowY:"auto"}}>
-        <div style={{display:"flex",gap:18,marginBottom:20}}>
-          <div style={{width:88,height:88,borderRadius:18,background:`linear-gradient(135deg,${item.color}22,${item.color}55)`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{item.sourceImage?<img src={item.sourceImage} style={{width:"100%",height:"100%",objectFit:"cover"}} alt={item.name}/>:<ItemIllustration item={item} size={80}/>}</div>
-          <div>
-            <div style={sr(20,500)}>{item.name}</div>
-            <div style={ss(10,400,DM,{letterSpacing:1,marginTop:4})}>{item.brand} · {item.category}</div>
-            <div style={sr(18,400,G,{marginTop:6})}>${item.price}</div>
-          </div>
-        </div>
 
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
-          {[["Worn",item.wearCount+"x"],["Last Worn",item.lastWorn],["Purchased",item.purchaseDate]].map(([l,v])=>(
-            <div key={l} style={{background:_1a,borderRadius:12,padding:"10px 12px",textAlign:"center"}}>
-              <div style={sr(16,500,G)}>{v}</div>
-              <div style={ss(9,400,DM,{letterSpacing:1,textTransform:"uppercase",marginTop:3})}>{l}</div>
+        {/* ── EDIT MODE ── */}
+        {editing ? (
+          <>
+            <div style={{..._btwn,marginBottom:20}}>
+              <div style={sr(18,400)}>Edit Item</div>
+              <button onClick={()=>setEditing(false)} style={{background:"none",border:"none",cursor:_p,...ss(12,400,DM)}}>Cancel</button>
             </div>
-          ))}
-        </div>
 
-        <div style={{background:_1a,borderRadius:14,padding:"14px",marginBottom:14}}>
-          {[["Condition",item.condition],["Category",item.category]].map(([k,v])=>(
-            <div key={k} style={{display:"flex",justifyContent:"space-between",marginBottom:8,paddingBottom:8,borderBottom:`1px solid ${BR}`}}>
-              <div style={ss(12,400,DM,{letterSpacing:1})}>{k}</div>
-              <div style={ss(12,400,MD)}>{v}</div>
-            </div>
-          ))}
-          <div style={{..._btwn}}>
-            <div style={ss(12,400,DM,{letterSpacing:1})}>Color</div>
-            <div style={{..._row,gap:7}}>
-              <div style={{width:14,height:14,borderRadius:"50%",background:item.color,border:"1px solid #FFFFFF22"}}/>
-              <div style={ss(12,400,MD)}>{hexToColorName(item.color)}</div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{marginBottom:16}}>
-          <Lbl mb={10}>PAIRS WELL WITH</Lbl>
-          <div style={{display:"flex",gap:8}}>
-            {pairCats.map(cat=>{
-              const isActive=activePair===cat;
-              return(
-                <div key={cat} onClick={()=>setActivePair(isActive?null:cat)}
-                  style={{flex:1,borderRadius:14,background:isActive?`linear-gradient(135deg,${G}18,${G}28)`:"#1A1A1A",border:`1px solid ${isActive?G:BR}`,padding:"10px 6px",textAlign:"center",cursor:_p,transition:"all 0.2s"}}>
-                  <div style={{fontSize:22,marginBottom:5}}>{catIcon[cat]||"✦"}</div>
-                  <div style={ss(9,isActive?600:400,isActive?G:MD,{letterSpacing:0.3})}>{cat}</div>
+            {/* Image */}
+            <div style={{marginBottom:16}}>
+              <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:8})}>PHOTO</div>
+              <input ref={imgRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
+                const file=e.target.files?.[0]; if(!file) return;
+                const reader=new FileReader();
+                reader.onload=ev=>setCropSrc(ev.target.result);
+                reader.readAsDataURL(file);
+              }}/>
+              <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                <div style={{width:80,height:80,borderRadius:14,background:`linear-gradient(135deg,${item.color}22,${item.color}44)`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${G}33`}}>
+                  {editImage
+                    ? <img src={editImage} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="preview"/>
+                    : <ItemIllustration item={item} size={60}/>
+                  }
                 </div>
-              );
-            })}
-          </div>
-          {activePair&&(
-            <div style={{marginTop:10,background:`linear-gradient(135deg,${G}10,${G}18)`,borderRadius:12,padding:"10px 14px",border:`1px solid ${G}33`}}>
-              <div style={ss(11,400,MD,{lineHeight:1.5,fontStyle:"italic"})}>
-                ✦ {(tipMap[item.category]||{})[activePair]||`${activePair} pair beautifully with ${item.category.toLowerCase()}.`}
+                <div style={{display:"flex",flexDirection:"column",gap:8,flex:1}}>
+                  <button onClick={()=>imgRef.current.click()} style={{padding:"9px 14px",borderRadius:10,background:_1a,border:`1px solid ${G}44`,...ss(9,600,G,{letterSpacing:1}),cursor:_p}}>
+                    📷 {editImage?"REPLACE PHOTO":"UPLOAD PHOTO"}
+                  </button>
+                  {editImage && (
+                    <button onClick={()=>setCropSrc(editImage)} style={{padding:"9px 14px",borderRadius:10,background:_1a,border:`1px solid ${G}44`,...ss(9,600,G,{letterSpacing:1}),cursor:_p}}>
+                      ✂️ CROP PHOTO
+                    </button>
+                  )}
+                  {editImage && (
+                    <button onClick={()=>setEditImage(null)} style={{padding:"9px 14px",borderRadius:10,background:"#1A0A0A",border:"1px solid #3A1A1A",...ss(9,600,"#A86060",{letterSpacing:1}),cursor:_p}}>
+                      × REMOVE
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          )}
-        </div>
 
-        <div style={{display:"flex",gap:10,flexDirection:"column"}}>
-          {item.tags?.includes("demo") && (
-            <div style={{background:"#1A1A0A",border:`1px solid ${G}33`,borderRadius:10,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:12}}>ℹ️</span>
-              <span style={ss(9,400,DM,{lineHeight:1.4})}>This is a demo item. Add your own items via Photo Upload or URL to build your real closet.</span>
+            {/* Crop modal */}
+            {cropSrc&&(
+              <CropModal
+                src={cropSrc}
+                onCancel={()=>setCropSrc(null)}
+                onSave={cropped=>{setEditImage(cropped);setCropSrc(null);}}
+              />
+            )}
+
+            {/* Name */}
+            <div style={{marginBottom:12}}>
+              <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>ITEM NAME</div>
+              <input value={editName} onChange={e=>setEditName(e.target.value)} style={inputStyle} placeholder="e.g. Silk Ivory Blouse"/>
             </div>
-          )}
-          <div style={{display:"flex",gap:10}}>
-            <Btn onClick={()=>{showToast("Listed for sale \u2746");onClose();}} outline>LIST FOR SALE</Btn>
-            <Btn onClick={()=>{onAddToOutfit(item.id);onClose();}} full>ADD TO OUTFIT</Btn>
-          </div>
-          {onRemove && (
-            <button onClick={()=>{
-              if(window.confirm(`Remove "${item.name}" from your closet?`)){
-                onRemove(item.id);
-                onClose();
-                showToast(`${item.name} removed \u2746`);
-              }
-            }} style={{width:"100%",padding:"11px",borderRadius:12,background:"#1A0A0A",border:"1px solid #3A1A1A",...ss(9,600,"#A86060",{letterSpacing:1}),cursor:_p}}>
-              REMOVE FROM CLOSET
+
+            {/* Brand */}
+            <div style={{marginBottom:12}}>
+              <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>BRAND</div>
+              <input value={editBrand} onChange={e=>setEditBrand(e.target.value)} style={inputStyle} placeholder="e.g. Aritzia, Zara, Unknown"/>
+            </div>
+
+            {/* Price */}
+            <div style={{marginBottom:12}}>
+              <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>PRICE ($)</div>
+              <input value={editPrice} onChange={e=>setEditPrice(e.target.value.replace(/\D/g,""))} style={inputStyle} placeholder="e.g. 180" inputMode="numeric"/>
+            </div>
+
+            {/* Category */}
+            <div style={{marginBottom:12}}>
+              <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:8})}>CATEGORY</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {categories.map(cat=>(
+                  <button key={cat} onClick={()=>setEditCategory(cat)} style={{
+                    padding:"7px 14px",borderRadius:20,cursor:_p,
+                    background:editCategory===cat?`${G}22`:_1a,
+                    border:editCategory===cat?`1.5px solid ${G}`:`1px solid #2A2A2A`,
+                    display:"flex",alignItems:"center",gap:5,
+                    ...ss(10,editCategory===cat?600:400,editCategory===cat?G:DM,{letterSpacing:0.5}),
+                  }}>
+                    <span>{categoryEmoji[cat]}</span>{cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Purchase date */}
+            <div style={{marginBottom:20}}>
+              <MonthYearPicker label="DATE PURCHASED" value={editDate} onChange={setEditDate}/>
+            </div>
+
+            <button onClick={saveEdit} style={{width:"100%",padding:"13px",borderRadius:14,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,700,BK,{letterSpacing:1.5}),cursor:_p}}>
+              SAVE CHANGES
             </button>
-          )}
-        </div>
+          </>
+        ) : (
+          <>
+            {/* ── VIEW MODE ── */}
+            <div style={{display:"flex",gap:18,marginBottom:20}}>
+              <div style={{width:88,height:88,borderRadius:18,background:`linear-gradient(135deg,${item.color}22,${item.color}55)`,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {item.sourceImage?<img src={item.sourceImage} style={{width:"100%",height:"100%",objectFit:"cover"}} alt={item.name}/>:<ItemIllustration item={item} size={80}/>}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{..._btwn,alignItems:"flex-start"}}>
+                  <div style={sr(20,500,undefined,{lineHeight:1.2,flex:1,marginRight:8})}>{item.name}</div>
+                  <button onClick={openEdit} style={{flexShrink:0,padding:"5px 12px",borderRadius:20,background:_1a,border:`1px solid ${G}44`,...ss(9,600,G,{letterSpacing:0.5}),cursor:_p}}>EDIT</button>
+                </div>
+                <div style={ss(10,400,DM,{letterSpacing:1,marginTop:4})}>{item.brand} · {item.category}</div>
+                <div style={sr(18,400,G,{marginTop:6})}>${item.price}</div>
+              </div>
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+              {[["Worn",item.wearCount+"x"],["Last Worn",item.lastWorn],["Purchased",item.purchaseDate]].map(([l,v])=>(
+                <div key={l} style={{background:_1a,borderRadius:12,padding:"10px 12px",textAlign:"center"}}>
+                  <div style={sr(16,500,G)}>{v}</div>
+                  <div style={ss(9,400,DM,{letterSpacing:1,textTransform:"uppercase",marginTop:3})}>{l}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{background:_1a,borderRadius:14,padding:"14px",marginBottom:14}}>
+              {[["Condition",item.condition],["Category",item.category]].map(([k,v])=>(
+                <div key={k} style={{display:"flex",justifyContent:"space-between",marginBottom:8,paddingBottom:8,borderBottom:`1px solid ${BR}`}}>
+                  <div style={ss(12,400,DM,{letterSpacing:1})}>{k}</div>
+                  <div style={ss(12,400,MD)}>{v}</div>
+                </div>
+              ))}
+              <div style={{..._btwn}}>
+                <div style={ss(12,400,DM,{letterSpacing:1})}>Color</div>
+                <div style={{..._row,gap:7}}>
+                  <div style={{width:14,height:14,borderRadius:"50%",background:item.color,border:"1px solid #FFFFFF22"}}/>
+                  <div style={ss(12,400,MD)}>{hexToColorName(item.color)}</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{marginBottom:16}}>
+              <Lbl mb={10}>PAIRS WELL WITH</Lbl>
+              <div style={{display:"flex",gap:8}}>
+                {pairCats.map(cat=>{
+                  const isActive=activePair===cat;
+                  return(
+                    <div key={cat} onClick={()=>setActivePair(isActive?null:cat)}
+                      style={{flex:1,borderRadius:14,background:isActive?`linear-gradient(135deg,${G}18,${G}28)`:"#1A1A1A",border:`1px solid ${isActive?G:BR}`,padding:"10px 6px",textAlign:"center",cursor:_p,transition:"all 0.2s"}}>
+                      <div style={{fontSize:22,marginBottom:5}}>{catIcon[cat]||"✦"}</div>
+                      <div style={ss(9,isActive?600:400,isActive?G:MD,{letterSpacing:0.3})}>{cat}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              {activePair&&(
+                <div style={{marginTop:10,background:`linear-gradient(135deg,${G}10,${G}18)`,borderRadius:12,padding:"10px 14px",border:`1px solid ${G}33`}}>
+                  <div style={ss(11,400,MD,{lineHeight:1.5,fontStyle:"italic"})}>
+                    ✦ {(tipMap[item.category]||{})[activePair]||`${activePair} pair beautifully with ${item.category.toLowerCase()}.`}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{display:"flex",gap:10,flexDirection:"column"}}>
+              {item.tags?.includes("demo") && (
+                <div style={{background:"#1A1A0A",border:`1px solid ${G}33`,borderRadius:10,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:12}}>ℹ️</span>
+                  <span style={ss(9,400,DM,{lineHeight:1.4})}>This is a demo item. Add your own items via Photo Upload or URL to build your real closet.</span>
+                </div>
+              )}
+              <div style={{display:"flex",gap:10}}>
+                <Btn onClick={()=>{showToast("Listed for sale \u2746");onClose();}} outline>LIST FOR SALE</Btn>
+                <Btn onClick={()=>{onAddToOutfit(item.id);onClose();}} full>ADD TO OUTFIT</Btn>
+              </div>
+              {onRemove && (
+                <button onClick={()=>{
+                  if(window.confirm(`Remove "${item.name}" from your closet?`)){
+                    onRemove(item.id);
+                    onClose();
+                    showToast(`${item.name} removed \u2746`);
+                  }
+                }} style={{width:"100%",padding:"11px",borderRadius:12,background:"#1A0A0A",border:"1px solid #3A1A1A",...ss(9,600,"#A86060",{letterSpacing:1}),cursor:_p}}>
+                  REMOVE FROM CLOSET
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -2222,23 +2790,65 @@ function SwipeRow({label,arr,idx,setIdx,emoji,isLocked,onLockToggle,onMarkUnavai
   const cardBorder=isLocked?`2px solid ${G}`:`1px solid ${item.color}44`;
 
   return(
-    <div style={{position:"relative",height:140,marginBottom:8,touchAction:"pan-y"}}>
-      {behindItem&&arr.length>1&&(dragging||flying!==0)&&(
-        <div style={{..._abs0,borderRadius:20,overflow:"hidden",background:`linear-gradient(160deg,${behindItem.color}18,${behindItem.color}40)`,border:`1px solid ${behindItem.color}33`,transform:`scale(${0.94+dragPct*0.06})`,transition:"transform 0.1s",display:"flex",alignItems:"center",justifyContent:"center"}}>
-          {behindItem.sourceImage?<img src={behindItem.sourceImage} style={{width:"100%",height:"100%",objectFit:"contain",padding:16,boxSizing:"border-box"}} alt={behindItem.name}/>:<ItemIllustration item={behindItem} size={80}/>}
-          <div style={{position:"absolute",bottom:0,left:0,right:0,padding:"10px 14px",background:"linear-gradient(transparent,#0D0D0DCC)"}}>
-            <div style={sr(13,500,"#E8E0D4",{opacity:0.5})}>{behindItem.name}</div>
+    <div style={{position:"relative",height:180,marginBottom:10,touchAction:"pan-y",paddingLeft:20,paddingRight:20,boxSizing:"border-box"}}>
+      {/* Behind card peek */}
+      {behindItem&&arr.length>1&&(dragging||(flying!==0))&&(
+        <div style={{position:"absolute",top:0,bottom:0,left:20,right:20,borderRadius:20,overflow:"hidden",background:"linear-gradient(135deg,#1A1510,#1E1A14)",border:`1px solid ${behindItem.color}33`,transform:`scale(${0.94+dragPct*0.06})`,transition:"transform 0.1s",display:"flex",alignItems:"center"}}>
+          <div style={{width:"42%",height:"100%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",padding:"12px 0 12px 12px",boxSizing:"border-box"}}>
+            {behindItem.sourceImage
+              ? <img src={behindItem.sourceImage} style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}} alt={behindItem.name}/>
+              : <ItemIllustration item={behindItem} size={90}/>
+            }
+          </div>
+          <div style={{flex:1,padding:"0 20px",minWidth:0}}>
+            <div style={sr(18,400,"#E8E0D4",{opacity:0.35,lineHeight:1.3})}>{behindItem.name}</div>
           </div>
         </div>
       )}
-      <div onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTransitionEnd={flying!==0?onFlyEnd:undefined}
-        style={{position:"absolute",inset:0,borderRadius:20,overflow:"hidden",background:`linear-gradient(160deg,${item.color}18,${item.color}40)`,border:cardBorder,boxShadow:isLocked?`0 0 0 1px ${G}44`:"none",transform:`translateX(${flyX}px) rotate(${rot}deg)`,transition:flying!==0?"transform 0.32s cubic-bezier(0.25,0.46,0.45,0.94)":dragging?"none":"transform 0.25s ease-out",cursor:"grab",userSelect:"none",touchAction:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
-        {item.sourceImage?<img src={item.sourceImage} style={{width:"100%",height:"100%",objectFit:"contain",padding:16,boxSizing:"border-box"}} alt={item.name}/>:<ItemIllustration item={item} size={90}/>}
-        <div style={{position:"absolute",top:10,left:12,...ss(8,700,DM,{letterSpacing:1.5,background:"#0D0D0D99",padding:"3px 8px",borderRadius:8,backdropFilter:"blur(4px)"})}}>{label.toUpperCase()}</div>
-        {isLocked&&<div onClick={e=>{e.stopPropagation();onLockToggle();}} style={{position:"absolute",top:10,right:12,background:`${G}EE`,borderRadius:8,padding:"3px 8px",display:"flex",alignItems:"center",gap:4,cursor:_p,...ss(8,700,BK,{letterSpacing:0.5})}}>🔒 LOCKED</div>}
-        {item.forSale&&!isLocked&&<div style={{position:"absolute",top:10,right:12,background:G,borderRadius:8,padding:"3px 8px",...ss(7,700,BK,{letterSpacing:1})}}>FOR SALE</div>}
-        {dragX<-20&&<div style={{position:"absolute",top:14,left:14,border:"2px solid #E08080",borderRadius:10,padding:"3px 10px",...ss(11,700,"#E08080",{letterSpacing:2}),opacity:Math.min(1,(-dragX-20)/60),transform:"rotate(-8deg)"}}>NEXT</div>}
-        {dragX>20&&<div style={{position:"absolute",top:14,right:14,border:"2px solid #80C880",borderRadius:10,padding:"3px 10px",...ss(11,700,"#80C880",{letterSpacing:2}),opacity:Math.min(1,(dragX-20)/60),transform:"rotate(8deg)"}}>PREV</div>}
+
+      {/* Front card — positioned within the padded area */}
+      <div key={idx} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTransitionEnd={flying!==0?onFlyEnd:undefined}
+        style={{
+          position:"absolute",top:0,bottom:0,left:20,right:20,
+          borderRadius:20,overflow:"hidden",
+          background:"linear-gradient(135deg,#1A1510,#1E1A14)",
+          border:isLocked?`1.5px solid ${G}`:`1px solid ${item.color}44`,
+          boxShadow:isLocked?`0 0 0 1px ${G}44`:"none",
+          transform:`translateX(${flyX}px) rotate(${rot}deg)`,
+          transition:flying!==0?"transform 0.32s cubic-bezier(0.25,0.46,0.45,0.94)":dragging?"none":"transform 0.25s ease-out",
+          cursor:"grab",userSelect:"none",touchAction:"pan-y",
+          display:"flex",alignItems:"center",
+        }}>
+
+        {/* Image — left ~42% */}
+        <div style={{width:"42%",height:"100%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",padding:"12px 0 12px 12px",boxSizing:"border-box"}}>
+          {item.sourceImage
+            ? <img src={item.sourceImage} style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}} alt={item.name}/>
+            : <ItemIllustration item={item} size={100}/>
+          }
+        </div>
+
+        {/* Divider */}
+        <div style={{width:1,height:"60%",background:"#2A2A2A",flexShrink:0}}/>
+
+        {/* Text — right side */}
+        <div style={{flex:1,padding:"0 22px",minWidth:0}}>
+          <div style={ss(8,600,DM,{letterSpacing:2,marginBottom:6})}>{label.toUpperCase()}</div>
+          <div style={sr(19,400,"#F0EBE3",{lineHeight:1.35,marginBottom:5})}>{item.name}</div>
+          <div style={ss(11,400,DM)}>{item.brand}</div>
+          {isLocked&&(
+            <div onClick={e=>{e.stopPropagation();onLockToggle();}} style={{marginTop:8,display:"inline-flex",alignItems:"center",gap:4,background:`${G}22`,border:`1px solid ${G}44`,borderRadius:8,padding:"3px 10px",cursor:_p,...ss(8,600,G,{letterSpacing:0.5})}}>🔒 LOCKED</div>
+          )}
+          {item.forSale&&!isLocked&&(
+            <div style={{marginTop:8,display:"inline-block",background:G,borderRadius:8,padding:"3px 10px",...ss(7,700,BK,{letterSpacing:1})}}>FOR SALE</div>
+          )}
+        </div>
+
+        {/* Swipe hints */}
+        {dragX<-20&&<div style={{position:"absolute",top:14,right:14,border:"2px solid #E08080",borderRadius:10,padding:"3px 10px",...ss(10,700,"#E08080",{letterSpacing:2}),opacity:Math.min(1,(-dragX-20)/60),transform:"rotate(-4deg)"}}>NEXT</div>}
+        {dragX>20&&<div style={{position:"absolute",top:14,left:14,border:"2px solid #80C880",borderRadius:10,padding:"3px 10px",...ss(10,700,"#80C880",{letterSpacing:2}),opacity:Math.min(1,(dragX-20)/60),transform:"rotate(4deg)"}}>PREV</div>}
+
+        {/* Laundry overlay */}
         {showLaundry&&(
           <div style={{..._abs0,background:"#0D0D0DEE",borderRadius:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,zIndex:10}}
             onTouchStart={e=>e.stopPropagation()} onTouchEnd={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()}>
@@ -2251,11 +2861,9 @@ function SwipeRow({label,arr,idx,setIdx,emoji,isLocked,onLockToggle,onMarkUnavai
             </div>
           </div>
         )}
-        <div style={{position:"absolute",bottom:0,left:0,right:0,padding:"10px 14px",background:"linear-gradient(transparent,#0D0D0DEE)"}}>
-          <div style={sr(15,500,"#F0EBE3",{lineHeight:1.2})}>{item.name}</div>
-          <div style={ss(9,400,DM,{marginTop:2})}>{item.brand}</div>
-        </div>
       </div>
+
+      {/* Dot indicators */}
       {arr.length>1&&(
         <div style={{position:"absolute",bottom:-18,left:0,right:0,display:"flex",justifyContent:"center",gap:4}}>
           {arr.map((_,i)=><div key={i} style={{width:i===idx?16:5,height:5,borderRadius:3,background:i===idx?G:"#2A2A2A",transition:"width 0.2s,background 0.2s"}}/>)}
@@ -2266,7 +2874,7 @@ function SwipeRow({label,arr,idx,setIdx,emoji,isLocked,onLockToggle,onMarkUnavai
 }
 
 // ── MIX & MATCH BUILDER ──────────────────────────────────────────────────────
-function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,logWear,outfits,setOutfits,setItems,items,onNewLook}){
+function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,logWear,outfits,setOutfits,setItems,items,onNewLook,onSaveOutfit}){
   const TEMP = 58; // degrees F — drives outerwear default
   const [ti,setTi]=useState(0);
   const [bi,setBi]=useState(0);
@@ -2279,11 +2887,16 @@ function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,log
   const [unavailable,setUnavailable]=useState(new Set());
   const [locked,setLocked]=useState({top:false,bottom:false,shoe:false,outerwear:false,accessory:false});
   // Outerwear auto-on when cold (< 65°F), accessories off by default
-  const [showOuterwear,setShowOuterwear]=useState(TEMP<65);
+  const [showOuterwear,setShowOuterwear]=useState(false);
   const [showAccessories,setShowAccessories]=useState(false);
+  const [dressMode,setDressMode]=useState(false);
+  const [showSaveModal,setShowSaveModal]=useState(false);
+  const [saveOutfitName,setSaveOutfitName]=useState("");
 
   // Filter each array removing unavailable items
-  const avTops       = tops.filter(i=>!unavailable.has(i.id));
+  const avTopsAll    = tops.filter(i=>!unavailable.has(i.id));
+  // In dress mode, only show Dresses; otherwise show everything
+  const avTops       = dressMode ? avTopsAll.filter(i=>i.category==="Dresses") : avTopsAll;
   const avBottoms    = bottoms.filter(i=>!unavailable.has(i.id));
   const avShoes      = shoes.filter(i=>!unavailable.has(i.id));
   const avOuterwear  = outerwear.filter(i=>!unavailable.has(i.id));
@@ -2301,6 +2914,9 @@ function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,log
   const shoe      = avShoes[sSafe]      || null;
   const outer     = avOuterwear[oSafe]  || null;
   const accessory = avAccessories[acSafe]|| null;
+
+  // Suppress bottoms when dress mode is on OR when current top is a Dress
+  const isDress = dressMode || top?.category === "Dresses";
 
   const cycle=(setter,arr,dir)=> setter(i=>(i+dir+arr.length)%arr.length);
 
@@ -2329,7 +2945,7 @@ function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,log
     const weather=`${TEMP}°F, Partly Cloudy`;
 
     const needTop      = !locked.top       || !top;
-    const needBottom   = !locked.bottom    || !bottom;
+    const needBottom   = !isDress && (!locked.bottom || !bottom);
     const needShoe     = !locked.shoe      || !shoe;
     const needOuterwear= showOuterwear  && (!locked.outerwear || !outer);
     const needAccessory= showAccessories && (!locked.accessory || !accessory);
@@ -2389,19 +3005,44 @@ function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,log
     showToast("AI styled your look \u2746");
   };
 
+  const saveCurrentAsOutfit=async()=>{
+    const combo=[top, isDress?null:bottom, shoe, showOuterwear?outer:null, showAccessories?accessory:null].filter(Boolean);
+    if(combo.length<2){showToast("Need at least 2 items to save \u2746");return;}
+    const name=saveOutfitName.trim()||combo.map(i=>i.name.split(" ")[0]).join(" + ");
+    const newOutfit={id:Date.now(),name,items:combo.map(i=>i.id),occasion:"Casual",season:"All Year",wornHistory:[]};
+    setOutfits(prev=>[...prev,newOutfit]);
+    if(typeof onSaveOutfit==="function"){const saved=await onSaveOutfit(newOutfit);if(saved?.id)newOutfit.id=saved.id;}
+    setShowSaveModal(false); setSaveOutfitName("");
+    showToast(`"${name}" saved as outfit \u2746`);
+  };
+
   const wearToday=()=>{
-    const combo=[top, bottom, shoe,
+    const combo=[top, isDress?null:bottom, shoe,
       showOuterwear?outer:null,
       showAccessories?accessory:null
     ].filter(Boolean);
     if(combo.length===0){showToast("Add items to your closet first \u2746");return;}
-    // Increment wear count on each item — no new outfit created
-    combo.forEach(item=>{
-      setItems(prev=>prev.map(i=>i.id===item.id?{...i,wearCount:i.wearCount+1,lastWorn:"Today"}:i));
+    const today = new Date();
+    const key = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+    const displayDate = today.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+    const comboIds = combo.map(i=>i.id);
+    // Update or create a "Mix & Match" outfit with today's wear logged
+    setOutfits(prev=>{
+      const existing = prev.find(o=>o.name==="Mix & Match");
+      if(existing){
+        const alreadyLogged = (existing.wornHistory||[]).includes(key);
+        const newHistory = alreadyLogged ? existing.wornHistory : [key,...(existing.wornHistory||[])];
+        return prev.map(o=>o.id===existing.id ? {...o, items:comboIds, wornHistory:newHistory} : o);
+      }
+      return [...prev, {id:Date.now(),name:"Mix & Match",items:comboIds,occasion:"Casual",season:"All Year",wornHistory:[key]}];
     });
+    // Increment wear count on each item
+    setItems(prev=>prev.map(i=>{
+      if(!comboIds.includes(i.id)) return i;
+      return {...i, wearCount:i.wearCount+1, lastWorn:displayDate};
+    }));
     setSaved(true); setAiVibe(null);
-    const label=combo.map(i=>i.name.split(" ")[0]).join(" + ");
-    showToast(`${label} — logged for today \u2746`);
+    showToast(`${combo.map(i=>i.name.split(" ")[0]).join(" + ")} — logged for today \u2746`);
     setTimeout(()=>setSaved(false),3000);
   };
 
@@ -2449,8 +3090,8 @@ function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,log
         </div>
       </button>
 
-      {/* ── ROW TOGGLES ── */}
-      <div style={{display:"flex",gap:6,marginBottom:14}}>
+      {/* ── ROW TOGGLES + NEW LOOK ── */}
+      <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
         <div style={ss(9,400,DM,{alignSelf:"center",marginRight:2,letterSpacing:0.5})}>Add row:</div>
         <button onClick={()=>setShowOuterwear(v=>!v)}
           style={{padding:"5px 12px",borderRadius:20,background:showOuterwear?`${G}22`:_1a,border:showOuterwear?`1px solid ${G}66`:_2a,cursor:_p,...ss(9,showOuterwear?600:400,showOuterwear?G:DM,{letterSpacing:0.5}),display:"flex",alignItems:"center",gap:4}}>
@@ -2460,15 +3101,14 @@ function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,log
           style={{padding:"5px 12px",borderRadius:20,background:showAccessories?`${G}22`:_1a,border:showAccessories?`1px solid ${G}66`:_2a,cursor:_p,...ss(9,showAccessories?600:400,showAccessories?G:DM,{letterSpacing:0.5}),display:"flex",alignItems:"center",gap:4}}>
           <span>💍</span> Accessories
         </button>
+        <button onClick={()=>{setDressMode(v=>!v);setTi(0);setAiVibe(null);}}
+          style={{padding:"5px 12px",borderRadius:20,background:dressMode?`${G}22`:_1a,border:dressMode?`1px solid ${G}66`:_2a,cursor:_p,...ss(9,dressMode?600:400,dressMode?G:DM,{letterSpacing:0.5}),display:"flex",alignItems:"center",gap:4}}>
+          <span>👗</span> Dresses
+        </button>
+        <button onClick={onNewLook} title="Build new look" style={{marginLeft:"auto",width:32,height:32,borderRadius:10,background:CD,border:`1px solid ${BR}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:_p,flexShrink:0,...ss(18,300,MD)}}>+</button>
       </div>
 
-      {/* Rows */}
-      <SwipeRow label="Tops"    arr={avTops}    idx={tSafe} setIdx={setTi} emoji="👚" isLocked={locked.top}       onLockToggle={()=>toggleLock("top")}       onMarkUnavailable={markUnavailable} onCycleEnd={()=>setAiVibe(null)}/>
-      <div style={{height:28}}/>
-      <SwipeRow label="Bottoms" arr={avBottoms} idx={bSafe} setIdx={setBi} emoji="👖" isLocked={locked.bottom}    onLockToggle={()=>toggleLock("bottom")}    onMarkUnavailable={markUnavailable} onCycleEnd={()=>setAiVibe(null)}/>
-      <div style={{height:28}}/>
-      <SwipeRow label="Shoes"   arr={avShoes}   idx={sSafe} setIdx={setSi} emoji="👟" isLocked={locked.shoe}      onLockToggle={()=>toggleLock("shoe")}      onMarkUnavailable={markUnavailable} onCycleEnd={()=>setAiVibe(null)}/>
-      <div style={{height:28}}/>
+      {/* Rows — Outerwear first when enabled */}
       {showOuterwear&&avOuterwear.length>0&&(
         <>
           <SwipeRow label="Outerwear"   arr={avOuterwear}   idx={oSafe}  setIdx={setOi} emoji="🧥" isLocked={locked.outerwear} onLockToggle={()=>toggleLock("outerwear")} onMarkUnavailable={markUnavailable} onCycleEnd={()=>setAiVibe(null)}/>
@@ -2478,6 +3118,20 @@ function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,log
       {showOuterwear&&avOuterwear.length===0&&(
         <div style={{borderRadius:16,background:CD,border:`1px solid ${BR}`,height:60,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:8,...ss(9,400,DM,{fontStyle:"italic"})}}>No outerwear in your closet yet</div>
       )}
+      <SwipeRow label={isDress?"Dress":"Tops"} arr={avTops} idx={tSafe} setIdx={setTi} emoji="👚" isLocked={locked.top} onLockToggle={()=>toggleLock("top")} onMarkUnavailable={markUnavailable} onCycleEnd={()=>setAiVibe(null)}/>
+      {dressMode&&avTops.length===0&&(
+        <div style={{borderRadius:16,background:CD,border:`1px solid ${BR}`,height:60,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:8,...ss(9,400,DM,{fontStyle:"italic"})}}>No dresses in your closet yet</div>
+      )}
+      <div style={{height:28}}/>
+      {!isDress&&(
+        <>
+          <SwipeRow label="Bottoms" arr={avBottoms} idx={bSafe} setIdx={setBi} emoji="👖" isLocked={locked.bottom} onLockToggle={()=>toggleLock("bottom")} onMarkUnavailable={markUnavailable} onCycleEnd={()=>setAiVibe(null)}/>
+          <div style={{height:28}}/>
+        </>
+      )}
+      {isDress&&<div style={{height:8}}/>}
+      <SwipeRow label="Shoes"   arr={avShoes}   idx={sSafe} setIdx={setSi} emoji="👟" isLocked={locked.shoe}      onLockToggle={()=>toggleLock("shoe")}      onMarkUnavailable={markUnavailable} onCycleEnd={()=>setAiVibe(null)}/>
+      <div style={{height:28}}/>
       {showAccessories&&avAccessories.length>0&&(
         <>
           <SwipeRow label="Accessories" arr={avAccessories} idx={acSafe} setIdx={setAi} emoji="💍" isLocked={locked.accessory} onLockToggle={()=>toggleLock("accessory")} onMarkUnavailable={markUnavailable} onCycleEnd={()=>setAiVibe(null)}/>
@@ -2490,11 +3144,38 @@ function MixMatchBuilder({tops,bottoms,shoes,outerwear,accessories,showToast,log
 
       {/* Action row */}
       <div style={{display:"flex",gap:8,marginTop:6}}>
-        <button onClick={wearToday} style={{flex:1,padding:"13px",borderRadius:14,background:saved?`linear-gradient(135deg,#2A4A2A,#1A3A1A)`:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,700,saved?"#80C080":BK,{letterSpacing:1.5}),cursor:_p,transition:"background 0.3s"}}>
-          {saved?"✓ LOGGED FOR TODAY":"WEAR TODAY"}
+        <button onClick={()=>setShowSaveModal(true)} style={{flex:1,padding:"13px",borderRadius:14,background:CD,border:`1px solid ${G}44`,...ss(10,700,G,{letterSpacing:1.5}),cursor:_p}}>
+          SAVE OUTFIT
         </button>
-        <button onClick={onNewLook} style={{width:46,height:46,borderRadius:14,background:CD,border:`1px solid ${BR}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:_p,flexShrink:0,...ss(20,300,MD)}}>+</button>
+        <button onClick={wearToday} style={{flex:1,padding:"13px",borderRadius:14,background:saved?`linear-gradient(135deg,#2A4A2A,#1A3A1A)`:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,700,saved?"#80C080":BK,{letterSpacing:1.5}),cursor:_p,transition:"background 0.3s"}}>
+          {saved?"✓ LOGGED":"WEAR TODAY"}
+        </button>
       </div>
+
+      {/* Save as outfit modal */}
+      {showSaveModal&&(
+        <div onClick={()=>setShowSaveModal(false)} style={{..._fix,background:"#000000AA",zIndex:80,display:"flex",alignItems:"flex-end"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#0D0D0D",borderRadius:"24px 24px 0 0",width:"100%",maxWidth:430,margin:"0 auto",border:_2a,padding:"24px 24px 40px",animation:"fadeUp 0.3s ease forwards"}}>
+            <div style={{width:36,height:4,borderRadius:2,background:"#333",margin:"0 auto 18px"}}/>
+            <div style={sr(20,400,undefined,{marginBottom:4})}>Save as Outfit</div>
+            <div style={ss(9,400,DM,{letterSpacing:1,marginBottom:16})}>NAME THIS LOOK</div>
+            {/* Preview thumbs */}
+            <div style={{display:"flex",gap:8,marginBottom:16}}>
+              {[top,bottom,shoe,showOuterwear?outer:null,showAccessories?accessory:null].filter(Boolean).map(item=>(
+                <ItemThumb key={item.id} item={item} size={52} r={12}/>
+              ))}
+            </div>
+            <input value={saveOutfitName} onChange={e=>setSaveOutfitName(e.target.value)}
+              placeholder={[top,bottom,shoe].filter(Boolean).map(i=>i?.name.split(" ")[0]).join(" + ")||"My Outfit"}
+              style={{width:"100%",boxSizing:"border-box",background:"#141414",border:`1px solid ${G}44`,borderRadius:12,padding:"12px 14px",...ss(13,400,MD),color:"#C0B8B0",outline:"none",marginBottom:16}}
+            />
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setShowSaveModal(false)} style={{flex:1,padding:"12px",borderRadius:14,background:_1a,border:_2a,...ss(9,600,DM,{letterSpacing:1}),cursor:_p}}>CANCEL</button>
+              <button onClick={saveCurrentAsOutfit} style={{flex:2,padding:"12px",borderRadius:14,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,BK,{letterSpacing:1.5}),cursor:_p}}>SAVE LOOK ✦</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2503,12 +3184,14 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
   const [builder,setBuilder]=useState([]);
   const [name,setName]=useState("");
   const [occasion,setOccasion]=useState("Casual");
+  const [mirror,setMirror]=useState(null);
   const [activeFilter,setActiveFilter]=useState("All");
   const [showBuilder,setShowBuilder]=useState(false);
   const [pinned,setPinned]=useState(new Set([1]));
   const [favorites,setFavorites]=useState(new Set([1,3]));
   const [todayOccasion,setTodayOccasion]=useState(null);
   const [selectedOutfit,setSelectedOutfit]=useState(null);
+  const [bSearch,setBSearch]=useState("");
 
   const weather={temp:"58°F",condition:"Partly Cloudy",icon:"⛅"};
   const today=new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"});
@@ -2604,7 +3287,7 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
         const shoes      = items.filter(i=>i.category==="Shoes");
         const outerwear  = items.filter(i=>i.category==="Outerwear");
         const accessories= items.filter(i=>i.category==="Accessories");
-        return <MixMatchBuilder tops={tops} bottoms={bottoms} shoes={shoes} outerwear={outerwear} accessories={accessories} items={items} showToast={showToast} logWear={logWear} outfits={outfits} setOutfits={setOutfits} setItems={setItems} onNewLook={()=>setShowBuilder(true)}/>;
+        return <MixMatchBuilder tops={tops} bottoms={bottoms} shoes={shoes} outerwear={outerwear} accessories={accessories} items={items} showToast={showToast} logWear={logWear} outfits={outfits} setOutfits={setOutfits} setItems={setItems} onNewLook={()=>setShowBuilder(true)} onSaveOutfit={onSaveOutfit}/>;
       })()}
 
 
@@ -2657,7 +3340,6 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
                   <div style={ss(8,400,DM,{letterSpacing:0.5})}>{outfit.season}</div>
                 </div>
               </div>
-              {/* Action icons */}
               <div style={{display:"flex",gap:4,flexShrink:0,marginLeft:8}}>
                 <button onClick={e=>{e.stopPropagation();toggleFav(outfit.id);}} style={{width:32,height:32,borderRadius:"50%",background:isFav?"#2A1A10":"#1A1A1A",border:isFav?`1px solid ${G}44`:"1px solid #2A2A2A",display:"flex",alignItems:"center",justifyContent:"center",cursor:_p,fontSize:14}}>
                   {isFav?"♥":"♡"}
@@ -2679,6 +3361,9 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
             {/* Actions */}
             <div style={{display:"flex",gap:8,paddingLeft:8}}>
               <button onClick={e=>{e.stopPropagation();logWear(outfit.id);showToast(`Wearing "${outfit.name}" today \u2746`);}} style={{flex:1,padding:"8px",borderRadius:11,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,BK,{letterSpacing:1}),cursor:_p}}>WEAR TODAY</button>
+              <button onClick={e=>{e.stopPropagation();setMirror({itemIds:outfit.items,name:outfit.name});}} style={{flex:1,padding:"8px",borderRadius:11,background:"linear-gradient(135deg,#14101A,#1A1424)",border:"1px solid #2A2040",display:"flex",alignItems:"center",justifyContent:"center",gap:5,cursor:_p,...ss(9,600,"#C0B0D8",{letterSpacing:1})}}>
+                <span style={{fontSize:12}}>🪞</span>MIRROR
+              </button>
               <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${outfit.name}"?`)){setOutfits(prev=>prev.filter(o=>o.id!==outfit.id));if(onDeleteOutfit)onDeleteOutfit(outfit.id);showToast(`"${outfit.name}" deleted \u2746`);}}} style={{width:36,padding:"8px",borderRadius:11,background:"#1A0A0A",border:"1px solid #3A1A1A",display:"flex",alignItems:"center",justifyContent:"center",cursor:_p,...ss(13,400,"#A86060")}}>
                 ×
               </button>
@@ -2724,6 +3409,9 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
                 {/* Actions */}
                 <div style={{display:"flex",gap:8,marginBottom:20}}>
                   <button onClick={()=>{logWear(o.id);showToast(`Wearing "${o.name}" today \u2746`);setSelectedOutfit(null);}} style={{flex:2,padding:"13px",borderRadius:14,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,700,BK,{letterSpacing:1}),cursor:_p}}>WEAR TODAY</button>
+                  <button onClick={()=>{setMirror({itemIds:o.items,name:o.name});setSelectedOutfit(null);}} style={{padding:"13px 14px",borderRadius:14,background:"linear-gradient(135deg,#14101A,#1A1424)",border:"1px solid #2A2040",display:"flex",alignItems:"center",gap:6,cursor:_p,...ss(10,600,"#C0B0D8",{letterSpacing:1})}}>
+                    <span style={{fontSize:14}}>🪞</span>MIRROR
+                  </button>
                   <button onClick={()=>{showToast(`"${o.name}" shared to feed \u2746`);setSelectedOutfit(null);}} style={{padding:"13px 14px",borderRadius:14,background:_1a,border:_2a,display:"flex",alignItems:"center",gap:5,cursor:_p,...ss(10,600,MD,{letterSpacing:0.5})}}>
                     <span style={{fontSize:13}}>✦</span>SHARE
                   </button>
@@ -2815,24 +3503,44 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
             }
           </div>
 
-          {/* Item picker */}
+          {/* Item picker with search */}
           <div style={ss(8,400,DM,{letterSpacing:1.5,marginBottom:8})}>YOUR CLOSET</div>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
-            {items.map(it=>{
+          <div style={{..._row,gap:8,background:"#0D0D0D",border:"1px solid #2A2A2A",borderRadius:10,padding:"8px 12px",marginBottom:10}}>
+            <span style={{fontSize:12,opacity:0.4}}>🔍</span>
+            <input value={bSearch} onChange={e=>setBSearch(e.target.value)} placeholder="Search closet…"
+              style={{flex:1,background:"none",border:"none",outline:"none",...ss(11,400,MD),color:"#C0B8B0"}}/>
+            {bSearch&&<button onClick={()=>setBSearch("")} style={{background:"none",border:"none",cursor:_p,...ss(12,400,DM)}}>✕</button>}
+          </div>
+          {!bSearch&&<div style={ss(8,400,DM,{letterSpacing:1,marginBottom:8})}>MOST WORN</div>}
+          <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+            {(bSearch.trim()
+              ? items.filter(i=>i.name.toLowerCase().includes(bSearch.toLowerCase())||i.brand.toLowerCase().includes(bSearch.toLowerCase())||i.category.toLowerCase().includes(bSearch.toLowerCase()))
+              : [...items].sort((a,b)=>b.wearCount-a.wearCount).slice(0,6)
+            ).map(it=>{
               const inBuilder=builder.includes(it.id);
               return(
-                <button key={it.id} onClick={()=>inBuilder?setBuilder(builder.filter(x=>x!==it.id)):setBuilder([...builder,it.id])}
-                  style={{background:inBuilder?`${G}22`:"#0D0D0D",border:inBuilder?`1.5px solid ${G}`:"1px solid #2A2A2A",borderRadius:10,padding:"4px",cursor:_p,position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}} title={it.name}>
-                  <ItemIllustration item={it} size={32}/>
-                  {inBuilder&&<div style={{position:"absolute",top:-4,right:-4,width:14,height:14,borderRadius:"50%",background:G,display:"flex",alignItems:"center",justifyContent:"center",...ss(8,700,BK)}}>✓</div>}
-                </button>
+                <div key={it.id} onClick={()=>inBuilder?setBuilder(builder.filter(x=>x!==it.id)):setBuilder([...builder,it.id])}
+                  style={{display:"flex",alignItems:"center",gap:10,background:inBuilder?`${G}18`:"#0D0D0D",border:inBuilder?`1.5px solid ${G}`:"1px solid #2A2A2A",borderRadius:12,padding:"8px 12px",cursor:_p,transition:"all 0.15s"}}>
+                  <ItemThumb item={it} size={40} r={10}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={sr(13,500,inBuilder?G:undefined,{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"})}>{it.name}</div>
+                    <div style={ss(9,400,DM,{marginTop:1})}>{it.brand} · {it.category} · Worn {it.wearCount}x</div>
+                  </div>
+                  {inBuilder&&<div style={{width:20,height:20,borderRadius:6,background:G,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...ss(10,700,BK)}}>✓</div>}
+                </div>
               );
             })}
+            {bSearch.trim()&&items.filter(i=>i.name.toLowerCase().includes(bSearch.toLowerCase())||i.brand.toLowerCase().includes(bSearch.toLowerCase())).length===0&&(
+              <div style={sr(12,300,"#3A3028",{fontStyle:"italic",textAlign:"center",padding:"12px 0"})}>No items match "{bSearch}"</div>
+            )}
           </div>
 
           {/* Save / Mirror */}
           {builder.length>0&&(
             <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setMirror({itemIds:builder,name:name||"New Look"})} style={{flex:1,padding:"12px",borderRadius:14,background:"linear-gradient(135deg,#14101A,#1A1424)",border:"1px solid #2A2040",display:"flex",alignItems:"center",justifyContent:"center",gap:6,cursor:_p,...ss(9,600,"#C0B0D8",{letterSpacing:1})}}>
+                <span style={{fontSize:14}}>🪞</span>MIRROR
+              </button>
               <button onClick={save} style={{flex:2,padding:"12px",borderRadius:14,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,BK,{letterSpacing:1.5}),cursor:_p}}>SAVE LOOK</button>
             </div>
           )}
@@ -2840,6 +3548,7 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
         </div>
       )}
 
+      {mirror&&<MirrorModal items={items} outfitItemIds={mirror.itemIds} outfitName={mirror.name} onClose={()=>setMirror(null)}/>}
     </div>
   );
 }
@@ -2982,96 +3691,231 @@ const userProfiles = {
 };
 
 // ── USER PROFILE PAGE ─────────────────────────────────────────────────────────
-function UserProfilePage({ handle, onClose, showToast }) {
-  const profile = userProfiles[handle];
-  const [activeTab, setActiveTab] = useState("posts");
+function UserProfilePage({ handle, userId, username, onClose, showToast, session, onAddToCloset }) {
+  const [activeTab, setActiveTab] = useState("items");
   const [following, setFollowing] = useState(false);
-  const portraits = [Portrait1, Portrait2, Portrait3, Portrait4];
+  const [loading, setLoading] = useState(false);
+  const [realProfile, setRealProfile] = useState(null);
+  const [addedItems, setAddedItems] = useState(new Set()); // track items already added
 
-  if (!profile) return null;
+  // Determine if this is a real user or demo profile
+  const isDemoUser = handle && userProfiles[handle];
+  const demoProfile = isDemoUser ? userProfiles[handle] : null;
+
+  // Fetch real user data from Supabase
+  useEffect(()=>{
+    if(!userId || isDemoUser) return;
+    setLoading(true);
+    (async()=>{
+      try{
+        const token = session?.access_token || "";
+        const headers = {"Authorization":`Bearer ${token}`,"apikey":SB_KEY};
+
+        const [profRes, itemsRes, outfitsRes, followersRes, followingRes, isFollowingRes] = await Promise.all([
+          fetch(`${SB_URL}/rest/v1/profiles?id=eq.${userId}&select=*`,{headers}).then(r=>r.json()),
+          fetch(`${SB_URL}/rest/v1/items?user_id=eq.${userId}&select=*&order=created_at.desc`,{headers}).then(r=>r.json()),
+          fetch(`${SB_URL}/rest/v1/outfits?user_id=eq.${userId}&select=*&order=created_at.desc`,{headers}).then(r=>r.json()),
+          fetch(`${SB_URL}/rest/v1/follows?following_id=eq.${userId}&select=id`,{headers}).then(r=>r.json()),
+          fetch(`${SB_URL}/rest/v1/follows?follower_id=eq.${userId}&select=id`,{headers}).then(r=>r.json()),
+          session?.user?.id ? fetch(`${SB_URL}/rest/v1/follows?follower_id=eq.${session.user.id}&following_id=eq.${userId}&select=id`,{headers}).then(r=>r.json()) : Promise.resolve([]),
+        ]);
+
+        const prof = Array.isArray(profRes) ? profRes[0] : null;
+        const items = Array.isArray(itemsRes) ? itemsRes : [];
+        const outfits = Array.isArray(outfitsRes) ? outfitsRes : [];
+        const followerCount = Array.isArray(followersRes) ? followersRes.length : 0;
+        const followingCount = Array.isArray(followingRes) ? followingRes.length : 0;
+        const isAlreadyFollowing = Array.isArray(isFollowingRes) && isFollowingRes.length > 0;
+
+        setFollowing(isAlreadyFollowing);
+
+        // Compute derived stats from real items
+        const brands = [...new Set(items.map(i=>i.brand).filter(Boolean))];
+        const colors = items.map(i=>i.color).filter(Boolean);
+        const colorCounts = {};
+        colors.forEach(c=>{ colorCounts[c]=(colorCounts[c]||0)+1; });
+        const topColors = Object.entries(colorCounts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(e=>e[0]);
+        const resaleValue = items.reduce((s,i)=>s+Math.round((i.price||0)*0.45),0);
+        const forSaleItems = items.filter(i=>i.forSale||i.for_sale);
+        const wornItems = items.filter(i=>(i.wearCount||i.wear_count||0)>0);
+        const utilScore = items.length ? Math.round((wornItems.length/items.length)*100) : 0;
+
+        // Build posts from outfits
+        const posts = outfits.map(o=>({
+          id: o.id,
+          outfit: o.name,
+          likes: Math.floor(Math.random()*300)+10, // placeholder until likes table exists
+          occasion: o.occasion,
+          items: (o.items||[]).map(id=>items.find(i=>i.id===id)).filter(Boolean),
+          wornHistory: o.wornHistory||o.worn_history||[],
+        }));
+
+        const closetValue = items.reduce((s,i)=>s+(i.price||0),0);
+
+        setRealProfile({
+          handle: `@${prof?.username||username||"user"}`,
+          name: prof?.username || username || "Outfix User",
+          location: prof?.location || "",
+          bio: prof?.bio || "",
+          style: prof?.style_identity || "",
+          avatar: (prof?.username||username||"?")[0]?.toUpperCase(),
+          followers: followerCount >= 1000 ? `${(followerCount/1000).toFixed(1)}k` : String(followerCount),
+          following: followingCount,
+          totalFollowers: followerCount,
+          posts: outfits.length,
+          items: items.length,
+          verified: false,
+          forSaleCount: forSaleItems.length,
+          stats: {
+            sustainabilityScore: utilScore,
+            brandsCount: brands.length,
+            resaleValue: `$${resaleValue.toLocaleString()}`,
+            closetValue: `$${closetValue.toLocaleString()}`,
+          },
+          highlights: [
+            { label:"Pieces",   emoji:"👔", count:items.length },
+            { label:"Outfits",  emoji:"✦",  count:outfits.length },
+            { label:"For Sale", emoji:"🏷️", count:forSaleItems.length },
+            { label:"Brands",   emoji:"🏷",  count:brands.length },
+          ],
+          recentPosts: posts,
+          allItems: items,
+          forSale: forSaleItems.map(i=>({
+            emoji: i.emoji||"👗",
+            name: i.name,
+            brand: i.brand||"Unknown",
+            price: i.price||0,
+            size: i.size||"—",
+            condition: i.condition||"Good",
+            likes: 0,
+            sourceImage: i.sourceImage||i.source_image||null,
+          })),
+          brands,
+          colorPalette: topColors.length ? topColors : ["#C4A882","#8B7355","#1A1A1A","#E8DDD0","#4A6080"],
+        });
+      }catch(e){ console.error("Profile load error:", e); }
+      setLoading(false);
+    })();
+  },[userId]);
+
+  // Follow/unfollow real user
+  const toggleFollow = async () => {
+    if(!session?.access_token || !userId) { showToast("Sign in to follow \u2746"); return; }
+    const token = session.access_token;
+    const myId = session.user?.id;
+    const headers = {"Content-Type":"application/json","Authorization":`Bearer ${token}`,"apikey":SB_KEY};
+    if(following){
+      await fetch(`${SB_URL}/rest/v1/follows?follower_id=eq.${myId}&following_id=eq.${userId}`,{method:"DELETE",headers});
+      showToast("Unfollowed \u2746");
+    } else {
+      await fetch(`${SB_URL}/rest/v1/follows`,{method:"POST",headers,body:JSON.stringify({follower_id:myId,following_id:userId})});
+      showToast("Following \u2746");
+    }
+    setFollowing(f=>!f);
+    if(realProfile) setRealProfile(p=>({...p,
+      totalFollowers: p.totalFollowers+(following?-1:1),
+      followers: String(p.totalFollowers+(following?-1:1)),
+    }));
+  };
+
+  const profile = demoProfile || realProfile;
+
+  if(loading) return(
+    <div style={{..._fix,background:BK,zIndex:400,maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+      <div style={{fontSize:32,animation:"spin 1.2s linear infinite",marginBottom:16}}>✦</div>
+      <div style={ss(11,400,DM,{letterSpacing:1})}>Loading profile…</div>
+    </div>
+  );
+
+  if(!profile) return(
+    <div style={{..._fix,background:BK,zIndex:400,maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+      <div style={{fontSize:36}}>👤</div>
+      <div style={sr(16,400,DM,{fontStyle:"italic"})}>Profile not found</div>
+      <button onClick={onClose} style={{padding:"10px 24px",borderRadius:20,background:_1a,border:_2a,...ss(9,600,G,{letterSpacing:1}),cursor:_p}}>GO BACK</button>
+    </div>
+  );
 
   const tabs = [
-    { id:"posts",   label:"POSTS",    count: profile.posts },
-    { id:"forsale", label:"FOR SALE", count: profile.forSaleCount },
-    { id:"about",   label:"ABOUT"                                  },
+    { id:"items",   label:"ITEMS",   count: profile.items },
+    { id:"posts",   label:"OUTFITS", count: profile.posts },
+    { id:"forsale", label:"FOR SALE",count: profile.forSaleCount },
+    { id:"about",   label:"ABOUT" },
   ];
 
   return (
     <div style={{..._fix,background:BK,zIndex:400,maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column"}}>
 
-      {/* ── HEADER BAR — fixed, never scrolls ── */}
+      {/* ── HEADER BAR ── */}
       <div style={{flexShrink:0,background:"#0A0908",borderBottom:"1px solid #1A1A1A",padding:"14px 18px",display:"flex",alignItems:"center",gap:12}}>
         <IconBtn onClick={onClose} sz={18}>←</IconBtn>
         <div style={{flex:1}}>
           <div style={ss(11,600,MD,{letterSpacing:0.5})}>{profile.handle}</div>
-          <div style={ss(9,400,DM,{letterSpacing:0.5})}>{profile.posts} posts</div>
+          <div style={ss(9,400,DM,{letterSpacing:0.5})}>{profile.posts} outfits</div>
         </div>
-        <IconBtn onClick={()=>showToast("Shared ❆")} sz={14}>↑</IconBtn>
+        <IconBtn onClick={()=>showToast("Shared \u2746")} sz={14}>↑</IconBtn>
       </div>
 
       {/* ── SCROLLABLE BODY ── */}
       <div style={{flex:1,overflowY:"auto"}} className="sc">
 
-      {/* ── HERO / COVER ── */}
+      {/* ── HERO ── */}
       <div style={{position:"relative",height:80,background:"linear-gradient(135deg,#1A1510,#0F0D0A)",flexShrink:0,overflow:"hidden"}}>
-        {/* Abstract colour palette background */}
-        {profile.colorPalette.map((col,i)=>(
+        {(profile.colorPalette||[]).map((col,i)=>(
           <div key={i} style={{position:"absolute",borderRadius:"50%",width:100,height:100,background:col,opacity:0.22,filter:"blur(28px)",top:`${-20+i*10}%`,left:`${i*24}%`}}/>
         ))}
-        {/* Location — only thing that fits at this height */}
-        <div style={{position:"absolute",bottom:10,right:14,...ss(9,400,DM,{letterSpacing:1})}}>📍 {profile.location}</div>
+        {profile.location&&<div style={{position:"absolute",bottom:10,right:14,...ss(9,400,DM,{letterSpacing:1})}}>📍 {profile.location}</div>}
       </div>
 
-      {/* ── PROFILE IDENTITY ROW ── */}
+      {/* ── PROFILE IDENTITY ── */}
       <div style={{padding:"14px 18px 0",flexShrink:0}}>
-
-        {/* Single row: avatar + name on left, buttons on right — all vertically centred */}
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,marginBottom:12}}>
-          {/* Left: avatar + name */}
+          {/* Avatar + name */}
           <div style={{display:"flex",gap:12,alignItems:"center",minWidth:0}}>
-            <div style={{width:64,height:64,borderRadius:"50%",background:"linear-gradient(135deg,#2A2420,#1A1410)",border:`2px solid #2A2A2A`,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 0 0 1px ${G}33`}}>
-              {AVATAR_DEFS[profile.handle]?<AvatarPortrait user={profile.handle} size={60}/>:profile.avatar}
+            <div style={{width:64,height:64,borderRadius:"50%",background:"linear-gradient(135deg,#2A2420,#1A1410)",border:`2px solid #2A2A2A`,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 0 0 1px ${G}33`}}>
+              {demoProfile
+                ? (AVATAR_DEFS[profile.handle]?<AvatarPortrait user={profile.handle} size={60}/>:<span style={{fontSize:28}}>{profile.avatar}</span>)
+                : <span style={{...sr(26,600,G)}}>{profile.avatar}</span>
+              }
             </div>
             <div style={{minWidth:0}}>
               <div style={{..._row,gap:5,marginBottom:2}}>
                 <div style={sr(20,500)}>{profile.name}</div>
-                {profile.verified && <div style={{width:15,height:15,borderRadius:"50%",background:G,display:"flex",alignItems:"center",justifyContent:"center",...ss(8,700,BK),flexShrink:0}}>✓</div>}
+                {profile.verified&&<div style={{width:15,height:15,borderRadius:"50%",background:G,display:"flex",alignItems:"center",justifyContent:"center",...ss(8,700,BK),flexShrink:0}}>✓</div>}
               </div>
               <div style={ss(10,400,DM,{letterSpacing:1})}>{profile.handle}</div>
-              <div style={{...sr(11,300,"#7A6858"),fontStyle:"italic",marginTop:3}}>{profile.style}</div>
+              {profile.style&&<div style={{...sr(11,300,"#7A6858"),fontStyle:"italic",marginTop:3}}>{profile.style}</div>}
             </div>
           </div>
-          {/* Right: action buttons */}
+          {/* Buttons */}
           <div style={{display:"flex",gap:8,flexShrink:0}}>
-            <button onClick={()=>showToast("Message sent ❆")} style={{width:36,height:36,borderRadius:"50%",background:_1a,border:_2a,display:"flex",alignItems:"center",justifyContent:"center",...ss(14,400,MD),cursor:_p}}>✉</button>
-            <button onClick={()=>{setFollowing(f=>!f);showToast(following?"Unfollowed ❆":"Following ❆");}} style={{padding:"8px 20px",borderRadius:20,background:following?"#1A1A1A":`linear-gradient(135deg,${G},#8A6E54)`,border:following?"1px solid #2A2A2A":"none",...ss(10,600,following?MD:BK,{letterSpacing:1}),cursor:_p}}>
+            <button onClick={()=>showToast("Message coming soon \u2746")} style={{width:36,height:36,borderRadius:"50%",background:_1a,border:_2a,display:"flex",alignItems:"center",justifyContent:"center",...ss(14,400,MD),cursor:_p}}>✉</button>
+            <button onClick={demoProfile?()=>{setFollowing(f=>!f);showToast(following?"Unfollowed \u2746":"Following \u2746");}:toggleFollow}
+              style={{padding:"8px 20px",borderRadius:20,background:following?"#1A1A1A":`linear-gradient(135deg,${G},#8A6E54)`,border:following?"1px solid #2A2A2A":"none",...ss(10,600,following?MD:BK,{letterSpacing:1}),cursor:_p}}>
               {following?"FOLLOWING":"FOLLOW"}
             </button>
           </div>
         </div>
 
-        {/* Bio */}
-        <div style={{...ss(11,400,"#A09880"),lineHeight:1.7,marginBottom:14}}>{profile.bio}</div>
+        {profile.bio&&<div style={{...ss(11,400,"#A09880"),lineHeight:1.7,marginBottom:14}}>{profile.bio}</div>}
 
-        {/* Stats row */}
+        {/* Stats row — Followers + Following only */}
         <div style={{display:"flex",gap:0,marginBottom:16,background:"#111",borderRadius:14,overflow:"hidden",border:"1px solid #1E1E1E"}}>
           {[
-            { label:"Posts",     value:profile.posts.toLocaleString()     },
-            { label:"Followers", value:profile.followers                   },
-            { label:"Following", value:profile.following.toLocaleString()  },
+            {label:"Followers", value:profile.followers},
+            {label:"Following", value:profile.following},
           ].map((s,i)=>(
-            <div key={i} style={{flex:1,padding:"12px 8px",textAlign:"center",borderRight:i<2?"1px solid #1E1E1E":"none"}}>
+            <div key={i} style={{flex:1,padding:"12px 8px",textAlign:"center",borderRight:i<1?"1px solid #1E1E1E":"none"}}>
               <div style={sr(18,500,G)}>{s.value}</div>
-              <div style={ss(8,400,DM,{letterSpacing:1,marginTop:2})}>{s.label.toUpperCase()}</div>
+              <div style={ss(8,400,DM,{letterSpacing:1,marginTop:2})}>{String(s.label).toUpperCase()}</div>
             </div>
           ))}
         </div>
 
-        {/* Highlight chips */}
+        {/* Highlight chips — Pieces + Outfits + For Sale + Brands */}
         <div style={{display:"flex",gap:8,marginBottom:16,overflowX:"auto",paddingBottom:4}}>
-          {profile.highlights.map((h,i)=>(
-            <div key={i} style={{flexShrink:0,textAlign:"center",width:72,cursor:_p}} onClick={()=>showToast(`${h.label} ❆`)}>
-              <div style={{width:64,height:64,borderRadius:18,background:"#161412",border:`1.5px solid #2A2418`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,margin:"0 auto 6px"}}>
+          {(profile.highlights||[]).map((h,i)=>(
+            <div key={i} style={{flexShrink:0,textAlign:"center",width:72,cursor:_p}}>
+              <div style={{width:64,height:64,borderRadius:18,background:"#161412",border:"1.5px solid #2A2418",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,margin:"0 auto 6px"}}>
                 <div style={{fontSize:20}}>{h.emoji}</div>
                 <div style={ss(9,700,G,{letterSpacing:0.5})}>{h.count}</div>
               </div>
@@ -3080,12 +3924,11 @@ function UserProfilePage({ handle, onClose, showToast }) {
           ))}
         </div>
 
-        {/* Wardrobe insight cards */}
+        {/* Wardrobe insight cards — Value + Est. Resale */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:18}}>
           {[
-            {label:"Sustainability", value:`${profile.stats.sustainabilityScore}/100`, icon:"🌿"},
-            {label:"Brands owned",  value:profile.stats.brandsCount, icon:"🏷️"},
-            {label:"Resale value",  value:profile.stats.resaleValue, icon:"✦"},
+            {label:"Closet Value",  value:profile.stats.closetValue,  icon:"💰"},
+            {label:"Est. Resale",   value:profile.stats.resaleValue,   icon:"✦"},
           ].map((s,i)=>(
             <div key={i} style={{background:"#111",borderRadius:12,padding:"12px 14px",border:"1px solid #1E1E1E"}}>
               <div style={{fontSize:14,marginBottom:4}}>{s.icon}</div>
@@ -3096,26 +3939,18 @@ function UserProfilePage({ handle, onClose, showToast }) {
         </div>
 
         {/* Brand DNA */}
-        <div style={{marginBottom:18}}>
-          <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:10})}>BRAND DNA</div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-            {profile.brands.map((b,i)=>(
-              <div key={i} style={{padding:"5px 12px",borderRadius:20,background:"#141210",border:"1px solid #2A2418",...ss(9,400,MD,{letterSpacing:0.5})}}>
-                {b}
-              </div>
-            ))}
+        {profile.brands?.length>0&&(
+          <div style={{marginBottom:18}}>
+            <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:10})}>BRAND DNA</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              {profile.brands.slice(0,12).map((b,i)=>(
+                <div key={i} style={{padding:"5px 12px",borderRadius:20,background:"#141210",border:"1px solid #2A2418",...ss(9,400,MD,{letterSpacing:0.5})}}>
+                  {b}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-
-        {/* Color palette */}
-        <div style={{marginBottom:20}}>
-          <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:10})}>PALETTE</div>
-          <div style={{..._row,gap:8}}>
-            {profile.colorPalette.map((col,i)=>(
-              <div key={i} style={{width:36,height:36,borderRadius:10,background:col,border:_2a,boxShadow:"0 2px 8px #00000040"}}/>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
 
       {/* ── CONTENT TABS ── */}
@@ -3127,74 +3962,147 @@ function UserProfilePage({ handle, onClose, showToast }) {
         ))}
       </div>
 
-      {/* ── POSTS TAB ── */}
-      {activeTab==="posts" && (
+      {/* ── OUTFITS TAB ── */}
+      {activeTab==="posts"&&(
         <div style={{padding:"16px 18px",flex:1}}>
-          {profile.recentPosts.map(post=>{
-            const PortraitComp = portraits[(post.portrait-1) % portraits.length];
+          {(profile.recentPosts||[]).length===0&&(
+            <div style={{textAlign:"center",padding:"48px 0",opacity:0.4}}>
+              <div style={sr(14,300,DM,{fontStyle:"italic"})}>No outfits posted yet</div>
+            </div>
+          )}
+          {(profile.recentPosts||[]).map((post,pi)=>{
+            const PortraitComp = demoProfile ? [Portrait1,Portrait2,Portrait3,Portrait4][(post.portrait-1)%4] : null;
             return(
-              <div key={post.id} style={{background:"#111",borderRadius:18,overflow:"hidden",marginBottom:14,border:"1px solid #1E1E1E"}}>
-                {/* Mini portrait */}
-                <div style={{width:"100%",position:"relative"}}>
-                  <div style={{width:"100%",paddingTop:"56%",position:"relative",overflow:"hidden"}}>
-                    <div style={{..._abs0}}><PortraitComp/></div>
+              <div key={post.id||pi} style={{background:"#111",borderRadius:18,overflow:"hidden",marginBottom:14,border:"1px solid #1E1E1E"}}>
+                {PortraitComp?(
+                  <div style={{width:"100%",position:"relative"}}>
+                    <div style={{width:"100%",paddingTop:"56%",position:"relative",overflow:"hidden"}}>
+                      <div style={{..._abs0}}><PortraitComp/></div>
+                    </div>
+                    <div style={{position:"absolute",bottom:10,left:14}}>
+                      <div style={{...sr(16,500,"#F0EBE3"),textShadow:"0 1px 8px #00000099"}}>{post.outfit}</div>
+                    </div>
                   </div>
-                  <div style={{position:"absolute",bottom:0,left:0,right:0,height:60,background:"linear-gradient(transparent,#111CC)"}}/>
-                  <div style={{position:"absolute",bottom:10,left:14}}>
-                    <div style={{...sr(16,500,"#F0EBE3"),textShadow:"0 1px 8px #00000099"}}>{post.outfit}</div>
+                ):(
+                  <div style={{padding:"14px 14px 6px"}}>
+                    <div style={sr(15,500,"#E8E0D4")}>{post.outfit}</div>
+                    {post.occasion&&<div style={ss(9,400,DM,{marginTop:2})}>{post.occasion}</div>}
                   </div>
-                </div>
-                {/* Item chips */}
+                )}
                 <div style={{padding:"12px 14px"}}>
                   <div style={{display:"flex",gap:8,marginBottom:12,overflowX:"auto",paddingBottom:2}}>
-                    {post.items.map((item,i)=>(
+                    {(post.items||[]).map((item,i)=>(
                       <div key={i} style={{flexShrink:0,width:80,borderRadius:12,overflow:"hidden",background:_1a,border:_2a}}>
-                        <div style={{height:64,display:"flex",alignItems:"center",justifyContent:"center",background:"#1E1E1E"}}>
-                          <ItemIllustration item={item} size={52}/>
+                        <div style={{height:64,display:"flex",alignItems:"center",justifyContent:"center",background:"#1E1E1E",overflow:"hidden"}}>
+                          {item.sourceImage||item.source_image
+                            ? <img src={item.sourceImage||item.source_image} style={{width:"100%",height:"100%",objectFit:"contain",padding:4,boxSizing:"border-box"}} alt={item.name}/>
+                            : <ItemIllustration item={item} size={52}/>
+                          }
                         </div>
                         <div style={{padding:"6px 6px 8px"}}>
                           <div style={ss(8,500,MD,{overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"})}>{item.name}</div>
-                          <div style={sr(11,500,G)}>${item.price}</div>
+                          <div style={sr(11,500,G)}>${item.price||0}</div>
                         </div>
                       </div>
                     ))}
                   </div>
                   <div style={{..._btwn}}>
-                    <div style={ss(10,400,DM)}>♡ {post.likes.toLocaleString()}</div>
-                    <button onClick={()=>showToast("Saved ❆")} style={{padding:"5px 14px",borderRadius:20,background:_1a,border:_2a,...ss(8,400,MD,{letterSpacing:1}),cursor:_p}}>SAVE LOOK</button>
+                    <div style={ss(10,400,DM)}>♡ {post.likes}</div>
+                    <button onClick={()=>showToast("Saved \u2746")} style={{padding:"5px 14px",borderRadius:20,background:_1a,border:_2a,...ss(8,400,MD,{letterSpacing:1}),cursor:_p}}>SAVE LOOK</button>
                   </div>
                 </div>
               </div>
             );
           })}
-          <div style={{textAlign:"center",padding:"10px 0 20px"}}>
-            <button onClick={()=>showToast("Loading more posts ❆")} style={{padding:"10px 28px",borderRadius:20,background:_1a,border:_2a,...ss(9,400,DM,{letterSpacing:1}),cursor:_p}}>LOAD MORE</button>
+        </div>
+      )}
+
+      {/* ── ITEMS TAB ── */}
+      {activeTab==="items"&&(
+        <div style={{padding:"16px 18px",flex:1}}>
+          {(profile.allItems||[]).length===0&&(
+            <div style={{textAlign:"center",padding:"48px 0",opacity:0.4}}>
+              <div style={sr(14,300,DM,{fontStyle:"italic"})}>No items in closet yet</div>
+            </div>
+          )}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {(profile.allItems||[]).map((item,i)=>{
+              const alreadyAdded = addedItems.has(item.id||i);
+              return(
+              <div key={i} style={{background:"#111",borderRadius:14,overflow:"hidden",border:"1px solid #1E1E1E"}}>
+                <div style={{height:120,background:`linear-gradient(135deg,${item.color||"#2A2A2A"}18,${item.color||"#2A2A2A"}33)`,display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+                  {item.sourceImage||item.source_image
+                    ? <img src={item.sourceImage||item.source_image} style={{width:"100%",height:"100%",objectFit:"contain",padding:8,boxSizing:"border-box"}} alt={item.name}/>
+                    : <ItemIllustration item={item} size={70}/>
+                  }
+                  {(item.forSale||item.for_sale)&&<div style={{position:"absolute",top:6,right:6,background:G,borderRadius:6,padding:"2px 6px",...ss(7,700,BK,{letterSpacing:0.5})}}>FOR SALE</div>}
+                </div>
+                <div style={{padding:"8px 10px 10px"}}>
+                  <div style={ss(11,500,MD,{overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"})}>{item.name}</div>
+                  <div style={ss(9,400,DM,{marginTop:1})}>{item.brand}</div>
+                  <div style={{..._btwn,marginTop:6}}>
+                    <div style={sr(12,500,G)}>${item.price||0}</div>
+                    <button onClick={async()=>{
+                      if(alreadyAdded||!onAddToCloset) return;
+                      const newItem={
+                        id: Date.now(),
+                        name: item.name,
+                        brand: item.brand||"Unknown",
+                        category: item.category||"Tops",
+                        color: item.color||"#C4A882",
+                        price: item.price||0,
+                        emoji: item.emoji||"👗",
+                        wearCount: 0,
+                        lastWorn: "Never",
+                        purchaseDate: "",
+                        condition: item.condition||"Good",
+                        forSale: false,
+                        tags: [],
+                        sourceImage: item.sourceImage||item.source_image||null,
+                      };
+                      await onAddToCloset(newItem);
+                      setAddedItems(prev=>new Set([...prev,item.id||i]));
+                      showToast(`${item.name} added to your closet \u2746`);
+                    }} style={{
+                      padding:"4px 10px",borderRadius:20,cursor:alreadyAdded?"default":_p,
+                      background:alreadyAdded?"#1A2A1A":`${G}22`,
+                      border:alreadyAdded?"1px solid #2A4A2A":`1px solid ${G}55`,
+                      ...ss(8,600,alreadyAdded?"#80C880":G,{letterSpacing:0.5}),
+                    }}>
+                      {alreadyAdded?"✓ Added":"+ Closet"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* ── FOR SALE TAB ── */}
-      {activeTab==="forsale" && (
+      {activeTab==="forsale"&&(
         <div style={{padding:"16px 18px",flex:1}}>
-          <div style={{...ss(10,400,DM,{letterSpacing:1,marginBottom:14})}}>
-            {profile.forSaleCount} items listed · Ships worldwide
-          </div>
-          {profile.forSale.map((item,i)=>(
+          {profile.forSaleCount===0&&(
+            <div style={{textAlign:"center",padding:"48px 0",opacity:0.4}}>
+              <div style={sr(14,300,DM,{fontStyle:"italic"})}>Nothing for sale right now</div>
+            </div>
+          )}
+          {(profile.forSale||[]).map((item,i)=>(
             <div key={i} style={{background:"#111",borderRadius:16,padding:"14px 16px",marginBottom:10,border:"1px solid #1E1E1E",display:"flex",gap:14,alignItems:"center"}}>
               <div style={{width:60,height:60,borderRadius:12,background:_1a,overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                <ItemIllustration item={item} size={52}/>
+                {item.sourceImage?<img src={item.sourceImage} style={{width:"100%",height:"100%",objectFit:"contain"}} alt={item.name}/>:<ItemIllustration item={item} size={52}/>}
               </div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={sr(14,500)}>{item.name}</div>
-                <div style={ss(9,400,DM,{marginTop:2})}>{item.brand} · Size {item.size}</div>
+                <div style={ss(9,400,DM,{marginTop:2})}>{item.brand}{item.size&&item.size!=="—"?` · Size ${item.size}`:""}</div>
                 <div style={{..._row,gap:8,marginTop:6}}>
                   <div style={{background:"#1A2A1A",borderRadius:10,padding:"2px 8px",...ss(8,600,"#A8C4A0",{letterSpacing:0.5})}}>{item.condition}</div>
-                  <div style={ss(9,400,DM)}>♡ {item.likes}</div>
                 </div>
               </div>
               <div style={{textAlign:"right",flexShrink:0}}>
                 <div style={sr(18,500,G)}>${item.price}</div>
-                <button onClick={()=>showToast(`Offer sent on ${item.name} ❆`)} style={{marginTop:6,padding:"6px 14px",borderRadius:10,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(8,600,BK,{letterSpacing:1}),cursor:_p}}>OFFER</button>
+                <button onClick={()=>showToast(`Offer sent on ${item.name} \u2746`)} style={{marginTop:6,padding:"6px 14px",borderRadius:10,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(8,600,BK,{letterSpacing:1}),cursor:_p}}>OFFER</button>
               </div>
             </div>
           ))}
@@ -3202,28 +4110,26 @@ function UserProfilePage({ handle, onClose, showToast }) {
       )}
 
       {/* ── ABOUT TAB ── */}
-      {activeTab==="about" && (
+      {activeTab==="about"&&(
         <div style={{padding:"16px 18px",flex:1}}>
-          {/* Style identity */}
           <div style={{background:"#111",borderRadius:16,padding:"18px",marginBottom:14,border:"1px solid #1E1E1E"}}>
             <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:10})}>STYLE IDENTITY</div>
-            <div style={sr(16,400,"#C0B09A",{lineHeight:1.8,fontStyle:"italic"})}>"{profile.style}"</div>
-            <div style={{marginTop:14,...ss(10,400,"#907860",{lineHeight:1.7})}}>
-              {profile.bio}
-            </div>
+            {profile.style
+              ? <div style={sr(16,400,"#C0B09A",{lineHeight:1.8,fontStyle:"italic"})}>&ldquo;{profile.style}&rdquo;</div>
+              : <div style={ss(10,400,DM,{fontStyle:"italic"})}>No style identity set yet</div>
+            }
+            {profile.bio&&<div style={{marginTop:14,...ss(10,400,"#907860",{lineHeight:1.7})}}>{profile.bio}</div>}
           </div>
-          {/* Wardrobe health */}
           <div style={{background:"#111",borderRadius:16,padding:"18px",marginBottom:14,border:"1px solid #1E1E1E"}}>
             <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:12})}>WARDROBE HEALTH</div>
             {[
-              {label:"Sustainability Score", value:profile.stats.sustainabilityScore, max:100, color:"#4A8A4A"},
-              {label:"Cost Efficiency",      value:82, max:100, color:G},
-              {label:"Resale Potential",     value:74, max:100, color:"#8A70C4"},
+              {label:"Item Utilization",  value:profile.stats.sustainabilityScore, color:"#4A8A4A"},
+              {label:"Brands Diversity",  value:Math.min(100,Math.round((profile.stats.brandsCount/20)*100)), color:G},
             ].map((bar,i)=>(
               <div key={i} style={{marginBottom:12}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
                   <div style={ss(9,400,MD,{letterSpacing:0.5})}>{bar.label}</div>
-                  <div style={ss(9,600,bar.color)}>{bar.value}/100</div>
+                  <div style={ss(9,600,bar.color)}>{bar.value}%</div>
                 </div>
                 <div style={{height:5,background:_1a,borderRadius:3,overflow:"hidden"}}>
                   <div style={{height:"100%",width:`${bar.value}%`,background:`linear-gradient(90deg,${bar.color},${bar.color}AA)`,borderRadius:3}}/>
@@ -3231,19 +4137,16 @@ function UserProfilePage({ handle, onClose, showToast }) {
               </div>
             ))}
           </div>
-          {/* Contact */}
           <div style={{background:"#111",borderRadius:16,padding:"18px",border:"1px solid #1E1E1E"}}>
             <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:12})}>CONNECT</div>
-            <button onClick={()=>showToast("Opening DM ❆")} style={{width:"100%",padding:"12px",borderRadius:12,background:"linear-gradient(135deg,#14101A,#1A1424)",border:"1px solid #2A2040",display:"flex",alignItems:"center",justifyContent:"center",gap:8,...ss(10,600,"#C0B0D8",{letterSpacing:1}),cursor:_p,marginBottom:8}}>
+            <button onClick={()=>showToast("Messaging coming soon \u2746")} style={{width:"100%",padding:"12px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",display:"flex",alignItems:"center",justifyContent:"center",gap:8,...ss(10,600,BK,{letterSpacing:1}),cursor:_p}}>
               ✉ SEND A MESSAGE
-            </button>
-            <button onClick={()=>showToast("Booking session ❆")} style={{width:"100%",padding:"12px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",display:"flex",alignItems:"center",justifyContent:"center",gap:8,...ss(10,600,BK,{letterSpacing:1}),cursor:_p}}>
-              ✦ BOOK STYLING SESSION
             </button>
           </div>
         </div>
       )}
-      </div>{/* end scrollable body */}
+
+      </div>{/* end scroll */}
     </div>
   );
 }
@@ -3251,261 +4154,740 @@ function UserProfilePage({ handle, onClose, showToast }) {
 // ── OUTFIT PORTRAIT ILLUSTRATIONS ─────────────────────────────────────────────
 // Four hand-crafted SVG fashion illustrations, one per feed post
 
-function ReverseSearchModal({onClose, onAddToWishlist}){
-  const [stage, setStage] = useState("upload"); // upload | scanning | results | error
-  const [preview, setPreview] = useState(null);
-  const [scanPct, setScanPct] = useState(0);
-  const [scanMsg, setScanMsg] = useState("Analyzing image…");
-  const [detected, setDetected] = useState([]);
-  const [added, setAdded] = useState({});
-  const fileRef = useRef(null);
+function Portrait1() {
+  // @jess.styles — "Sunday Market Run": denim jeans, white sneakers, knit scarf
+  // Casual-cool, natural tones, outdoor morning vibe
+  return (
+    <svg viewBox="0 0 380 420" fill="none" xmlns="http://www.w3.org/2000/svg" style={{width:"100%",height:"100%"}}>
+      <defs>
+        <linearGradient id="p1bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#E8DDD0"/>
+          <stop offset="100%" stopColor="#D4C4B0"/>
+        </linearGradient>
+        <linearGradient id="p1denim" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#4A6080"/>
+          <stop offset="100%" stopColor="#2A4060"/>
+        </linearGradient>
+        <linearGradient id="p1skin" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#E8C4A0"/>
+          <stop offset="100%" stopColor="#D4A880"/>
+        </linearGradient>
+        <radialGradient id="p1vignette" cx="50%" cy="50%" r="70%">
+          <stop offset="60%" stopColor="transparent"/>
+          <stop offset="100%" stopColor="#00000040"/>
+        </radialGradient>
+      </defs>
 
-  const handleFile = async (file) => {
-    if (!file || !file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const dataUrl = e.target.result;
-      setPreview(dataUrl);
-      setStage("scanning");
-      let pct = 0;
-      const msgs = ["Analyzing image…","Detecting clothing items…","Identifying styles & brands…","Finding similar pieces…"];
-      let msgIdx = 0;
-      const tick = setInterval(() => {
-        pct += Math.random() * 8 + 3;
-        msgIdx = Math.min(Math.floor(pct / 25), msgs.length - 1);
-        setScanPct(Math.min(pct, 90));
-        setScanMsg(msgs[msgIdx]);
-      }, 200);
-      try {
-        const base64 = dataUrl.split(",")[1];
-        const mediaType = file.type;
-        const raw = await callClaudeVision(base64, mediaType,
-          `Identify all visible clothing items and accessories in this image. For each item provide: a short name, the likely brand or style category, an estimated price range, a confidence score 70-99, a relevant emoji, and a one-sentence style note. Respond ONLY with JSON: {"items":[{"id":1,"name":"...","brand":"...","price":"$X-Y","confidence":95,"emoji":"👗","note":"..."},...]}. Return 3-5 items maximum.`
+      {/* Background — warm linen */}
+      <rect width="380" height="420" fill="url(#p1bg)"/>
+      {/* Subtle grid texture */}
+      <line x1="0" y1="210" x2="380" y2="210" stroke="#C8B89A" strokeWidth="0.5" opacity="0.4"/>
+      <line x1="190" y1="0" x2="190" y2="420" stroke="#C8B89A" strokeWidth="0.5" opacity="0.4"/>
+      {/* Shadow on floor */}
+      <ellipse cx="190" cy="400" rx="80" ry="12" fill="#B0A090" opacity="0.3"/>
+
+      {/* ── FIGURE ── */}
+      {/* Legs — fitted denim */}
+      <path d="M148 240 L140 390 L162 392 L172 270 L190 270 L208 270 L218 392 L240 390 L232 240 Z" fill="url(#p1denim)"/>
+      {/* Denim seam details */}
+      <line x1="172" y1="250" x2="168" y2="390" stroke="#3A5070" strokeWidth="0.8" opacity="0.5"/>
+      <line x1="208" y1="250" x2="212" y2="390" stroke="#3A5070" strokeWidth="0.8" opacity="0.5"/>
+      {/* Belt line */}
+      <rect x="143" y="236" width="94" height="10" rx="2" fill="#3A2A1A"/>
+      <rect x="183" y="237" width="14" height="8" rx="1" fill="#C4A860"/>
+
+      {/* Torso — oversized cream knit top */}
+      <path d="M140 150 C134 160, 130 200, 132 240 L248 240 C250 200, 246 160, 240 150 C230 144, 210 140, 190 140 C170 140, 150 144, 140 150Z" fill="#F0EAE0"/>
+      {/* Knit texture lines */}
+      {[155,165,175,185,195,205,215,225].map((y,i) => (
+        `<line key="${i}" x1="136" y1="${y}" x2="244" y2="${y}" stroke="#DDD4C4" strokeWidth="0.7" strokeDasharray="3,3"/>`
+      )).join("")}
+
+      {/* Scarf — draped loosely over shoulders */}
+      <path d="M155 148 C160 165, 170 180, 175 210 C178 195, 182 175, 190 168 C198 175, 202 195, 205 210 C210 180, 220 165, 225 148 C215 155, 205 158, 190 158 C175 158, 165 155, 155 148Z" fill="#C47A5A" opacity="0.9"/>
+      {/* Scarf fringe */}
+      {[170,176,182,188,194,200,206,212].map((x,i) => (
+        `<line key="f${i}" x1="${x}" y1="208" x2="${x-2}" y2="226" stroke="#B06040" strokeWidth="1.2" strokeLinecap="round"/>`
+      )).join("")}
+
+      {/* Arms */}
+      {/* Left arm */}
+      <path d="M140 155 C128 170, 118 200, 120 230 L134 228 C134 205, 140 178, 148 162Z" fill="#F0EAE0"/>
+      <path d="M120 228 C115 238, 112 245, 115 252 L130 248 C128 242, 128 236, 132 228Z" fill="url(#p1skin)"/>
+      {/* Right arm — holding a coffee cup */}
+      <path d="M240 155 C252 170, 262 200, 260 230 L246 228 C246 205, 240 178, 232 162Z" fill="#F0EAE0"/>
+      <path d="M260 228 C265 238, 268 244, 265 252 L250 248 C252 242, 252 236, 248 228Z" fill="url(#p1skin)"/>
+      {/* Coffee cup in right hand */}
+      <rect x="255" y="245" width="22" height="28" rx="4" fill="#E8D4B0" stroke="#C4A880" strokeWidth="1"/>
+      <rect x="255" y="245" width="22" height="8" rx="2" fill="#6A4020"/>
+      <path d="M277 255 C283 255, 283 265, 277 265" stroke="#C4A880" strokeWidth="1.5" fill="none"/>
+
+      {/* Sneakers */}
+      <path d="M136 388 C124 390, 112 394, 110 400 L162 400 L164 388 Z" fill="#F5F0E8" stroke="#E0D8CC" strokeWidth="1"/>
+      <path d="M218 388 C230 390, 242 394, 244 400 L192 400 L190 388 Z" fill="#F5F0E8" stroke="#E0D8CC" strokeWidth="1"/>
+      {/* Shoe sole */}
+      <path d="M110 400 L162 400" stroke="#D0C8B8" strokeWidth="3" strokeLinecap="round"/>
+      <path d="M192 400 L244 400" stroke="#D0C8B8" strokeWidth="3" strokeLinecap="round"/>
+      {/* Laces */}
+      <line x1="128" y1="393" x2="154" y2="393" stroke="#C4A882" strokeWidth="1"/>
+      <line x1="224" y1="393" x2="238" y2="393" stroke="#C4A882" strokeWidth="1"/>
+
+      {/* Neck */}
+      <path d="M180 105 L180 142 L200 142 L200 105 Z" fill="url(#p1skin)"/>
+      {/* Head */}
+      <ellipse cx="190" cy="80" rx="34" ry="38" fill="url(#p1skin)"/>
+      {/* Hair — messy bun */}
+      <path d="M158 70 C155 40, 170 20, 190 18 C210 20, 225 40, 222 70 C215 58, 206 52, 200 55 C195 42, 185 42, 180 55 C174 52, 166 58, 158 70Z" fill="#2A1A10"/>
+      <ellipse cx="200" cy="34" rx="14" ry="12" fill="#3A2820"/>
+      {/* Face */}
+      <ellipse cx="180" cy="82" rx="4" ry="5" fill="#C4906A" opacity="0.6"/>
+      <ellipse cx="200" cy="82" rx="4" ry="5" fill="#C4906A" opacity="0.6"/>
+      <path d="M182 96 Q190 102, 198 96" stroke="#A06040" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+      <circle cx="179" cy="79" r="4.5" fill="#3A2A20"/>
+      <circle cx="200" cy="79" r="4.5" fill="#3A2A20"/>
+      <circle cx="180" cy="78" r="1.5" fill="#F0EBE3"/>
+      <circle cx="201" cy="78" r="1.5" fill="#F0EBE3"/>
+      {/* Sunglasses */}
+      <rect x="170" y="73" width="18" height="12" rx="5" fill="none" stroke="#2A1A0A" strokeWidth="2"/>
+      <rect x="192" y="73" width="18" height="12" rx="5" fill="none" stroke="#2A1A0A" strokeWidth="2"/>
+      <line x1="188" y1="79" x2="192" y2="79" stroke="#2A1A0A" strokeWidth="1.5"/>
+      <line x1="170" y1="79" x2="162" y2="77" stroke="#2A1A0A" strokeWidth="1.5"/>
+      <line x1="210" y1="79" x2="218" y2="77" stroke="#2A1A0A" strokeWidth="1.5"/>
+
+      {/* Vignette overlay */}
+      <rect width="380" height="420" fill="url(#p1vignette)"/>
+    </svg>
+  );
+}
+
+function Portrait2() {
+  // @minimal.edit — "All-Black Everything": fitted bodysuit, oversized blazer, heeled mules
+  return (
+    <svg viewBox="0 0 380 420" fill="none" xmlns="http://www.w3.org/2000/svg" style={{width:"100%",height:"100%"}}>
+      <defs>
+        <linearGradient id="p2bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#1A1A1A"/>
+          <stop offset="100%" stopColor="#0A0A0A"/>
+        </linearGradient>
+        <linearGradient id="p2blazer" x1="0" y1="0" x2="0.3" y2="1">
+          <stop offset="0%" stopColor="#2A2A2A"/>
+          <stop offset="100%" stopColor="#111111"/>
+        </linearGradient>
+        <linearGradient id="p2skin2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#C89878"/>
+          <stop offset="100%" stopColor="#A87858"/>
+        </linearGradient>
+        <radialGradient id="p2light" cx="40%" cy="20%" r="60%">
+          <stop offset="0%" stopColor="#FFFFFF08"/>
+          <stop offset="100%" stopColor="transparent"/>
+        </radialGradient>
+      </defs>
+
+      <rect width="380" height="420" fill="url(#p2bg)"/>
+      <rect width="380" height="420" fill="url(#p2light)"/>
+      {/* Floor reflection */}
+      <ellipse cx="190" cy="408" rx="70" ry="6" fill="#FFFFFF" opacity="0.06"/>
+
+      {/* ── FIGURE ── */}
+      {/* Legs — bodysuit/trousers, all black */}
+      <path d="M158 252 L150 400 L172 400 L180 272 L200 272 L208 272 L210 400 L230 400 L222 252 Z" fill="#151515"/>
+      {/* Subtle crease on trousers */}
+      <line x1="180" y1="272" x2="176" y2="400" stroke="#2A2A2A" strokeWidth="0.8" opacity="0.7"/>
+      <line x1="200" y1="272" x2="204" y2="400" stroke="#2A2A2A" strokeWidth="0.8" opacity="0.7"/>
+
+      {/* Bodysuit — fitted black */}
+      <path d="M158 145 C152 158, 150 210, 152 252 L228 252 C230 210, 228 158, 222 145 C212 138, 202 135, 190 135 C178 135, 168 138, 158 145Z" fill="#1A1A1A"/>
+
+      {/* Oversized blazer */}
+      {/* Left lapel/body */}
+      <path d="M118 148 C114 165, 112 210, 116 260 L156 255 C152 215, 152 168, 155 150 C140 148, 128 148, 118 148Z" fill="url(#p2blazer)" stroke="#303030" strokeWidth="0.5"/>
+      {/* Right lapel/body */}
+      <path d="M262 148 C266 165, 268 210, 264 260 L224 255 C228 215, 228 168, 225 150 C240 148, 252 148, 262 148Z" fill="url(#p2blazer)" stroke="#303030" strokeWidth="0.5"/>
+      {/* Blazer back panel */}
+      <path d="M155 150 L225 150 L228 255 L152 255Z" fill="#202020"/>
+      {/* Lapels */}
+      <path d="M155 150 C160 155, 168 162, 175 175 C180 162, 185 155, 190 150 Z" fill="#252525" stroke="#353535" strokeWidth="0.5"/>
+      <path d="M225 150 C220 155, 212 162, 205 175 C200 162, 195 155, 190 150 Z" fill="#252525" stroke="#353535" strokeWidth="0.5"/>
+      {/* Blazer pocket */}
+      <rect x="128" y="210" width="20" height="3" rx="1" fill="#353535"/>
+
+      {/* Left arm hanging */}
+      <path d="M118 148 C105 162, 98 200, 100 240 L116 238 C116 205, 120 172, 130 158Z" fill="#202020" stroke="#2A2A2A" strokeWidth="0.5"/>
+      <path d="M100 238 C97 250, 96 258, 100 265 L114 260 C112 253, 112 246, 114 238Z" fill="url(#p2skin2)"/>
+      {/* Right arm — hand on hip */}
+      <path d="M262 148 C275 162, 282 200, 280 240 L264 238 C264 205, 260 172, 250 158Z" fill="#202020" stroke="#2A2A2A" strokeWidth="0.5"/>
+      <path d="M280 238 C283 250, 283 258, 279 265 L265 260 C267 253, 267 246, 265 238Z" fill="url(#p2skin2)"/>
+
+      {/* Heeled mules */}
+      {/* Left shoe */}
+      <path d="M148 396 L172 396 L170 404 L146 404Z" fill="#1A1A1A" stroke="#333" strokeWidth="0.5"/>
+      <line x1="160" y1="396" x2="158" y2="368" stroke="#1A1A1A" strokeWidth="6" strokeLinecap="round"/>
+      {/* Heel */}
+      <rect x="146" y="400" width="6" height="14" rx="1" fill="#333"/>
+      {/* Right shoe */}
+      <path d="M208 396 L232 396 L234 404 L210 404Z" fill="#1A1A1A" stroke="#333" strokeWidth="0.5"/>
+      <line x1="220" y1="396" x2="222" y2="368" stroke="#1A1A1A" strokeWidth="6" strokeLinecap="round"/>
+      <rect x="228" y="400" width="6" height="14" rx="1" fill="#333"/>
+
+      {/* Neck */}
+      <path d="M181 105 L181 138 L199 138 L199 105 Z" fill="url(#p2skin2)"/>
+      {/* Head */}
+      <ellipse cx="190" cy="78" rx="33" ry="36" fill="url(#p2skin2)"/>
+      {/* Hair — sleek pulled back */}
+      <path d="M158 68 C155 38, 170 16, 190 14 C210 16, 225 38, 222 68 C218 55, 208 48, 200 52 L190 46 L180 52 C172 48, 162 55, 158 68Z" fill="#0A0808"/>
+      {/* Chignon/bun at back */}
+      <ellipse cx="190" cy="30" rx="20" ry="14" fill="#110E0E"/>
+      {/* Face */}
+      <circle cx="178" cy="76" r="4" fill="#181818" opacity="0.8"/>
+      <circle cx="202" cy="76" r="4" fill="#181818" opacity="0.8"/>
+      <circle cx="179" cy="75" r="1.5" fill="#E8DDD0" opacity="0.8"/>
+      <circle cx="203" cy="75" r="1.5" fill="#E8DDD0" opacity="0.8"/>
+      {/* Brows */}
+      <path d="M172 68 L186 66" stroke="#0A0808" strokeWidth="1.5" strokeLinecap="round"/>
+      <path d="M194 66 L208 68" stroke="#0A0808" strokeWidth="1.5" strokeLinecap="round"/>
+      {/* Lips — bold red */}
+      <path d="M183 92 Q190 98, 197 92 Q193 88, 190 89 Q187 88, 183 92Z" fill="#8A2020"/>
+      {/* Earrings — small gold hoops */}
+      <circle cx="158" cy="82" r="5" fill="none" stroke="#C4A860" strokeWidth="1.5"/>
+      <circle cx="222" cy="82" r="5" fill="none" stroke="#C4A860" strokeWidth="1.5"/>
+
+      {/* Rim lighting */}
+      <rect width="380" height="420" fill="none" stroke="#FFFFFF" strokeWidth="0" opacity="0.03"/>
+    </svg>
+  );
+}
+
+function Portrait3() {
+  // @the.closet.co — "Linen and Light": linen wrap dress, gold necklace, strappy sandals
+  return (
+    <svg viewBox="0 0 380 420" fill="none" xmlns="http://www.w3.org/2000/svg" style={{width:"100%",height:"100%"}}>
+      <defs>
+        <linearGradient id="p3bg" x1="0" y1="0" x2="0.5" y2="1">
+          <stop offset="0%" stopColor="#F2EDE4"/>
+          <stop offset="100%" stopColor="#E4D8C4"/>
+        </linearGradient>
+        <linearGradient id="p3dress" x1="0" y1="0" x2="0.2" y2="1">
+          <stop offset="0%" stopColor="#E8DCC8"/>
+          <stop offset="100%" stopColor="#D4C4A0"/>
+        </linearGradient>
+        <linearGradient id="p3skin3" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#E0BFA0"/>
+          <stop offset="100%" stopColor="#C8A080"/>
+        </linearGradient>
+        <radialGradient id="p3sun" cx="80%" cy="10%" r="50%">
+          <stop offset="0%" stopColor="#FFF5E0" stopOpacity="0.7"/>
+          <stop offset="100%" stopColor="transparent"/>
+        </radialGradient>
+      </defs>
+
+      <rect width="380" height="420" fill="url(#p3bg)"/>
+      <rect width="380" height="420" fill="url(#p3sun)"/>
+      {/* Floor shadow */}
+      <ellipse cx="190" cy="408" rx="75" ry="10" fill="#C8B898" opacity="0.25"/>
+      {/* Light texture lines */}
+      {[80,160,240,320].map((y,i) => (
+        <line key={i} x1="0" y1={y} x2="380" y2={y} stroke="#D8CCBA" strokeWidth="0.4" opacity="0.3"/>
+      ))}
+
+      {/* ── FIGURE ── */}
+      {/* Wrap dress — flowing, midi length */}
+      {/* Main body */}
+      <path d="M155 148 C148 165, 144 210, 142 270 C148 310, 155 355, 152 400 L180 400 L186 310 L190 290 L194 310 L200 400 L228 400 C225 355, 232 310, 238 270 C236 210, 232 165, 225 148 C215 142, 205 138, 190 138 C175 138, 165 142, 155 148Z" fill="url(#p3dress)"/>
+      {/* Wrap front overlap */}
+      <path d="M190 148 C184 160, 175 185, 168 220 C175 215, 185 208, 195 205 C200 185, 196 162, 190 148Z" fill="#D4C4A0" opacity="0.6"/>
+      {/* Dress linen texture */}
+      {[165,180,195,210,225,240,260,280,300,320,340,360,380].map((y,i) => (
+        <line key={`dt${i}`} x1="142" y1={y} x2="238" y2={y} stroke="#C8B890" strokeWidth="0.5" strokeDasharray="8,12" opacity="0.4"/>
+      ))}
+      {/* Dress wrap tie at waist */}
+      <path d="M172 218 C182 215, 192 216, 200 218 C204 215, 214 210, 220 205 C215 212, 205 220, 200 225 C195 228, 185 228, 180 225Z" fill="#C8B48A" opacity="0.8"/>
+
+      {/* Arms */}
+      {/* Left — relaxed down */}
+      <path d="M155 150 C143 165, 133 200, 134 238 L148 236 C149 205, 154 174, 162 158Z" fill="url(#p3dress)" opacity="0.8"/>
+      <path d="M134 236 C130 248, 128 258, 131 265 L145 260 C144 252, 144 244, 146 236Z" fill="url(#p3skin3)"/>
+      {/* Right — raised, tucking hair */}
+      <path d="M225 150 C234 140, 248 130, 255 118 L244 112 C238 122, 230 134, 222 144Z" fill="url(#p3dress)" opacity="0.8"/>
+      <path d="M255 118 C260 110, 262 100, 258 93 L246 98 C249 104, 250 112, 248 118Z" fill="url(#p3skin3)"/>
+
+      {/* Gold necklace */}
+      <path d="M174 138 C178 150, 184 158, 190 162 C196 158, 202 150, 206 138" stroke="#C4A840" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+      <circle cx="190" cy="162" r="3" fill="#C4A840"/>
+      <circle cx="190" cy="162" r="1.5" fill="#E8CC70"/>
+
+      {/* Strappy sandals */}
+      {/* Left */}
+      <line x1="152" y1="398" x2="170" y2="398" stroke="#B09060" strokeWidth="2" strokeLinecap="round"/>
+      <line x1="154" y1="394" x2="168" y2="394" stroke="#B09060" strokeWidth="1.5" strokeLinecap="round"/>
+      <line x1="156" y1="390" x2="166" y2="390" stroke="#B09060" strokeWidth="1.5" strokeLinecap="round"/>
+      <line x1="161" y1="388" x2="161" y2="400" stroke="#B09060" strokeWidth="1.5"/>
+      {/* Right */}
+      <line x1="210" y1="398" x2="228" y2="398" stroke="#B09060" strokeWidth="2" strokeLinecap="round"/>
+      <line x1="212" y1="394" x2="226" y2="394" stroke="#B09060" strokeWidth="1.5" strokeLinecap="round"/>
+      <line x1="214" y1="390" x2="224" y2="390" stroke="#B09060" strokeWidth="1.5" strokeLinecap="round"/>
+      <line x1="219" y1="388" x2="219" y2="400" stroke="#B09060" strokeWidth="1.5"/>
+
+      {/* Neck */}
+      <path d="M181 106 L181 140 L199 140 L199 106 Z" fill="url(#p3skin3)"/>
+      {/* Head */}
+      <ellipse cx="190" cy="78" rx="34" ry="38" fill="url(#p3skin3)"/>
+      {/* Hair — long wavy, half up */}
+      <path d="M157 72 C154 40, 168 16, 190 14 C212 16, 226 40, 223 72 C215 55, 204 46, 195 50 L190 44 L185 50 C176 46, 165 55, 157 72Z" fill="#5A3A22"/>
+      {/* Long hair flowing */}
+      <path d="M157 72 C150 90, 145 115, 148 145 C155 138, 160 130, 162 120 C164 105, 162 90, 157 72Z" fill="#5A3A22"/>
+      <path d="M223 72 C230 90, 235 120, 230 148 C224 140, 220 130, 218 118 C216 100, 218 86, 223 72Z" fill="#5A3A22"/>
+      {/* Face */}
+      <circle cx="178" cy="76" r="3.5" fill="#5A3A22" opacity="0.9"/>
+      <circle cx="202" cy="76" r="3.5" fill="#5A3A22" opacity="0.9"/>
+      <circle cx="179" cy="75" r="1.5" fill="#F8F0E8"/>
+      <circle cx="203" cy="75" r="1.5" fill="#F8F0E8"/>
+      {/* Brows — natural arched */}
+      <path d="M172 67 C176 64, 182 64, 186 66" stroke="#5A3A22" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+      <path d="M194 66 C198 64, 204 64, 208 67" stroke="#5A3A22" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+      {/* Smile */}
+      <path d="M184 92 Q190 99, 196 92" stroke="#A06050" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+      {/* Cheek flush */}
+      <ellipse cx="174" cy="87" rx="7" ry="4" fill="#E09080" opacity="0.2"/>
+      <ellipse cx="206" cy="87" rx="7" ry="4" fill="#E09080" opacity="0.2"/>
+      {/* Small flower in hair */}
+      <circle cx="215" cy="62" r="6" fill="#E8C8A0" opacity="0.7"/>
+      <circle cx="215" cy="62" r="3" fill="#F0E0C0"/>
+    </svg>
+  );
+}
+
+function Portrait4() {
+  // @curated.claire — "Board Room Energy": camel trench coat, tailored trousers, structured tote
+  return (
+    <svg viewBox="0 0 380 420" fill="none" xmlns="http://www.w3.org/2000/svg" style={{width:"100%",height:"100%"}}>
+      <defs>
+        <linearGradient id="p4bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#E8E0D4"/>
+          <stop offset="100%" stopColor="#D4CAB8"/>
+        </linearGradient>
+        <linearGradient id="p4coat" x1="0.1" y1="0" x2="0.9" y2="1">
+          <stop offset="0%" stopColor="#C8A870"/>
+          <stop offset="100%" stopColor="#A08040"/>
+        </linearGradient>
+        <linearGradient id="p4trousers" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#484038"/>
+          <stop offset="100%" stopColor="#302820"/>
+        </linearGradient>
+        <linearGradient id="p4skin4" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#D4A880"/>
+          <stop offset="100%" stopColor="#B88860"/>
+        </linearGradient>
+      </defs>
+
+      <rect width="380" height="420" fill="url(#p4bg)"/>
+      {/* Architectural background — vertical lines suggesting an office */}
+      <line x1="80" y1="0" x2="80" y2="420" stroke="#C8C0B0" strokeWidth="0.5" opacity="0.5"/>
+      <line x1="300" y1="0" x2="300" y2="420" stroke="#C8C0B0" strokeWidth="0.5" opacity="0.5"/>
+      <rect x="0" y="380" width="380" height="40" fill="#C4BAA8" opacity="0.4"/>
+      <ellipse cx="190" cy="408" rx="78" ry="9" fill="#B0A898" opacity="0.3"/>
+
+      {/* ── FIGURE ── */}
+      {/* Tailored trousers */}
+      <path d="M160 256 L152 400 L174 400 L182 278 L198 278 L206 278 L208 400 L228 400 L220 256 Z" fill="url(#p4trousers)"/>
+      {/* Trouser crease */}
+      <line x1="182" y1="280" x2="178" y2="400" stroke="#484040" strokeWidth="0.8" opacity="0.6"/>
+      <line x1="198" y1="280" x2="202" y2="400" stroke="#484040" strokeWidth="0.8" opacity="0.6"/>
+
+      {/* Blouse — white silk underneath */}
+      <path d="M166 148 C162 162, 160 210, 162 256 L218 256 C220 210, 218 162, 214 148 C206 142, 198 138, 190 138 C182 138, 174 142, 166 148Z" fill="#F5F0EA"/>
+
+      {/* Trench coat — main body */}
+      <path d="M122 145 C116 162, 112 215, 116 268 L160 262 C158 215, 158 168, 162 150 C148 146, 134 144, 122 145Z" fill="url(#p4coat)" stroke="#A09060" strokeWidth="0.5"/>
+      <path d="M258 145 C264 162, 268 215, 264 268 L220 262 C222 215, 222 168, 218 150 C232 146, 246 144, 258 145Z" fill="url(#p4coat)" stroke="#A09060" strokeWidth="0.5"/>
+      <path d="M162 150 L218 150 L220 262 L160 262Z" fill="#C09A5A"/>
+      {/* Coat lapels */}
+      <path d="M162 152 C168 160, 176 172, 182 188 C184 172, 186 160, 190 152Z" fill="#B88A48" stroke="#A07A38" strokeWidth="0.5"/>
+      <path d="M218 152 C212 160, 204 172, 198 188 C196 172, 194 160, 190 152Z" fill="#B88A48" stroke="#A07A38" strokeWidth="0.5"/>
+      {/* Belt */}
+      <path d="M150 220 L230 220 L232 228 L148 228Z" fill="#8A6828" opacity="0.9"/>
+      <rect x="185" y="220" width="10" height="8" rx="1" fill="#C4A840"/>
+      {/* Coat flap pockets */}
+      <rect x="128" y="238" width="26" height="16" rx="3" fill="#B88A48" stroke="#A07A38" strokeWidth="0.5"/>
+      <rect x="226" y="238" width="26" height="16" rx="3" fill="#B88A48" stroke="#A07A38" strokeWidth="0.5"/>
+      {/* Coat buttons */}
+      {[175,195].map((y,i) => (
+        <circle key={i} cx="190" cy={y} r="3" fill="#A07838" stroke="#C4A850" strokeWidth="0.5"/>
+      ))}
+
+      {/* Left arm — straight down */}
+      <path d="M122 145 C108 160, 100 200, 102 244 L118 242 C118 206, 122 170, 132 156Z" fill="url(#p4coat)" stroke="#A09060" strokeWidth="0.4"/>
+      <path d="M102 242 C99 255, 98 264, 102 270 L116 265 C114 258, 114 250, 116 242Z" fill="url(#p4skin4)"/>
+
+      {/* Right arm — carrying tote */}
+      <path d="M258 145 C272 160, 280 200, 278 244 L262 242 C262 206, 258 170, 248 156Z" fill="url(#p4coat)" stroke="#A09060" strokeWidth="0.4"/>
+      <path d="M278 242 C281 255, 282 264, 278 270 L264 265 C266 258, 266 250, 264 242Z" fill="url(#p4skin4)"/>
+
+      {/* Structured tote bag */}
+      <rect x="270" y="265" width="54" height="46" rx="5" fill="#1A1A1A" stroke="#2A2A2A" strokeWidth="0.5"/>
+      {/* Tote hardware */}
+      <rect x="282" y="258" width="6" height="10" rx="1" fill="#C4A840"/>
+      <rect x="306" y="258" width="6" height="10" rx="1" fill="#C4A840"/>
+      <path d="M282 260 Q290 252, 298 252 Q306 252, 312 260" stroke="#C4A840" strokeWidth="1.5" fill="none"/>
+      {/* Tote pocket */}
+      <rect x="278" y="278" width="38" height="24" rx="3" fill="#252525"/>
+      <line x1="297" y1="278" x2="297" y2="302" stroke="#1A1A1A" strokeWidth="1"/>
+
+      {/* Classic pumps */}
+      <path d="M150 396 L174 396 L172 404 L148 404Z" fill="#1E1A14" stroke="#2A2420" strokeWidth="0.5"/>
+      <line x1="162" y1="396" x2="160" y2="365" stroke="#1E1A14" strokeWidth="5" strokeLinecap="round"/>
+      <rect x="148" y="402" width="5" height="12" rx="1" fill="#2A2420"/>
+      <path d="M208 396 L232 396 L234 404 L210 404Z" fill="#1E1A14" stroke="#2A2420" strokeWidth="0.5"/>
+      <line x1="220" y1="396" x2="222" y2="365" stroke="#1E1A14" strokeWidth="5" strokeLinecap="round"/>
+      <rect x="227" y="402" width="5" height="12" rx="1" fill="#2A2420"/>
+
+      {/* Neck */}
+      <path d="M181 106 L181 140 L199 140 L199 106 Z" fill="url(#p4skin4)"/>
+      {/* Head */}
+      <ellipse cx="190" cy="78" rx="33" ry="37" fill="url(#p4skin4)"/>
+      {/* Hair — sleek bob */}
+      <path d="M158 72 C155 40, 168 16, 190 14 C212 16, 225 40, 222 72 C220 60, 212 52, 202 54 C196 44, 184 44, 178 54 C168 52, 160 60, 158 72Z" fill="#1A1210"/>
+      {/* Bob shape */}
+      <path d="M158 72 C154 88, 154 100, 158 110 C162 116, 168 118, 175 116 C170 106, 165 95, 165 82Z" fill="#1A1210"/>
+      <path d="M222 72 C226 88, 226 100, 222 110 C218 116, 212 118, 205 116 C210 106, 215 95, 215 82Z" fill="#1A1210"/>
+      {/* Face */}
+      <circle cx="178" cy="75" r="4" fill="#12100E" opacity="0.85"/>
+      <circle cx="202" cy="75" r="4" fill="#12100E" opacity="0.85"/>
+      <circle cx="179" cy="74" r="1.5" fill="#EEE8E0"/>
+      <circle cx="203" cy="74" r="1.5" fill="#EEE8E0"/>
+      {/* Brows — structured */}
+      <path d="M171 65 L186 63" stroke="#1A1210" strokeWidth="2" strokeLinecap="round"/>
+      <path d="M194 63 L209 65" stroke="#1A1210" strokeWidth="2" strokeLinecap="round"/>
+      {/* Lips — nude */}
+      <path d="M184 91 Q190 97, 196 91 Q193 88, 190 89 Q187 88, 184 91Z" fill="#B07060"/>
+      {/* Pearl earrings */}
+      <circle cx="157" cy="82" r="4" fill="#F0EBE3" stroke="#E0D8CC" strokeWidth="0.5"/>
+      <circle cx="223" cy="82" r="4" fill="#F0EBE3" stroke="#E0D8CC" strokeWidth="0.5"/>
+    </svg>
+  );
+}
+
+const outfitPortraits = [Portrait1, Portrait2, Portrait3, Portrait4];
+
+// ── REVERSE IMAGE SEARCH MODAL ───────────────────────────────────────────────
+
+function WishlistAddModal({onClose, onAddToWishlist}){
+  const [mode,setMode]=useState(null); // null | photo | url | describe | manual
+  const [scanning,setScanning]=useState(false);
+  const [url,setUrl]=useState("");
+  const [desc,setDesc]=useState("");
+  const [descResults,setDescResults]=useState([]);
+  const [descLoading,setDescLoading]=useState(false);
+  const [photoPreview,setPhotoPreview]=useState(null);
+  const [detected,setDetected]=useState([]);
+  const [added,setAdded]=useState({});
+  const [scanPct,setScanPct]=useState(0);
+  const [scanMsg,setScanMsg]=useState("Analyzing…");
+  const [scanStage,setScanStage]=useState("upload"); // upload | scanning | results | error
+  // Manual fields
+  const [wName,setWName]=useState("");
+  const [wBrand,setWBrand]=useState("");
+  const [wPrice,setWPrice]=useState("");
+  const [wColor,setWColor]=useState("#C4A882");
+  const [wGap,setWGap]=useState("");
+  const fileRef=useRef();
+
+  const colorSwatches=[
+    {name:"White",hex:"#F5F5F5"},{name:"Cream",hex:"#F5F0E8"},{name:"Yellow",hex:"#F0C040"},
+    {name:"Orange",hex:"#E07830"},{name:"Red",hex:"#C03030"},{name:"Pink",hex:"#E88090"},
+    {name:"Purple",hex:"#8060A0"},{name:"Blue",hex:"#3060A0"},{name:"Sky",hex:"#60A0D0"},
+    {name:"Green",hex:"#407840"},{name:"Olive",hex:"#6A7040"},{name:"Tan",hex:"#C4A882"},
+    {name:"Brown",hex:"#7A5030"},{name:"Grey",hex:"#808080"},{name:"Charcoal",hex:"#3A3A3A"},
+    {name:"Black",hex:"#1A1A1A"},
+  ];
+  const iStyle={width:"100%",boxSizing:"border-box",background:"#0D0D0D",border:"1px solid #2A2A2A",borderRadius:10,padding:"10px 14px",...ss(12,400,MD),color:"#C0B8B0",outline:"none"};
+
+  const reset=()=>{setMode(null);setUrl("");setDesc("");setDescResults([]);setPhotoPreview(null);setDetected([]);setAdded({});setScanPct(0);setScanStage("upload");setWName("");setWBrand("");setWPrice("");setWColor("#C4A882");setWGap("");};
+
+  const handlePhotoFile=async(file)=>{
+    if(!file||!file.type.startsWith("image/")) return;
+    const reader=new FileReader();
+    reader.onload=async(e)=>{
+      const dataUrl=e.target.result;
+      setPhotoPreview(dataUrl);
+      setScanStage("scanning");
+      let pct=0;
+      const msgs=["Analyzing image…","Detecting clothing items…","Identifying styles & brands…","Finding similar pieces…"];
+      let msgIdx=0;
+      const tick=setInterval(()=>{
+        pct+=Math.random()*8+3; msgIdx=Math.min(Math.floor(pct/25),msgs.length-1);
+        setScanPct(Math.min(pct,90)); setScanMsg(msgs[msgIdx]);
+      },200);
+      try{
+        const base64=dataUrl.split(",")[1];
+        const raw=await callClaudeVision(base64,file.type,
+          `Identify all visible clothing items and accessories in this fashion image. For each item provide a name, brand/style, estimated price range, confidence 70-99, emoji, and a short note. Respond ONLY with JSON: {"items":[{"id":1,"name":"...","brand":"...","price":"$X-Y","confidence":95,"emoji":"👗","note":"...","color":"#hexcode"}]}. Max 5 items.`
         );
-        clearInterval(tick);
-        setScanPct(100);
-        setScanMsg("Done!");
-        const json = JSON.parse(raw.replace(/```json|```/g,"").trim());
-        setTimeout(() => {
-          setDetected(json.items || []);
-          setStage("results");
-        }, 400);
-      } catch(err) {
-        clearInterval(tick);
-        setStage("error");
-      }
+        clearInterval(tick); setScanPct(100); setScanMsg("Done!");
+        const json=JSON.parse(raw.replace(/```json|```/g,"").trim());
+        setTimeout(()=>{ setDetected(json.items||[]); setScanStage("results"); },400);
+      }catch(err){ clearInterval(tick); setScanStage("error"); }
     };
     reader.readAsDataURL(file);
   };
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    handleFile(e.dataTransfer.files[0]);
-  };
-
-  const toggleAdd = (item) => {
-    if (added[item.id]) {
-      setAdded(p => { const n={...p}; delete n[item.id]; return n; });
-    } else {
-      setAdded(p => ({...p, [item.id]: true}));
-    }
-  };
-
-  const confirmAll = () => {
-    const toAdd = detected.filter(d => added[d.id]);
-    toAdd.forEach(item => onAddToWishlist({...item, sourceImage: preview}));
+  const confirmPhoto=()=>{
+    detected.filter(d=>added[d.id]).forEach(item=>onAddToWishlist({
+      id:Date.now()+item.id,name:item.name,brand:item.brand,
+      price:parseInt((item.price||"0").replace(/\D/g,""))||0,
+      emoji:item.emoji||"👗",gap:item.note||"Saved from photo",
+      inMarket:false,sourceImage:photoPreview,color:item.color||"#C4A882",
+    }));
     onClose();
   };
 
-  const addedCount = Object.keys(added).length;
+  const fetchUrl=async()=>{
+    if(!url.trim()) return;
+    setScanning(true);
+    try{
+      const [raw,productRes]=await Promise.all([
+        callClaude(`A user pasted this product URL into a wishlist app: "${url}"\nIdentify the item. Return ONLY JSON: {"name":"...","brand":"...","price":150,"emoji":"👗","color":"#hexcode","note":"..."}`),
+        fetch("/api/fetch-product",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url.trim()})}).then(r=>r.json()).catch(()=>({price:null,image:null}))
+      ]);
+      const json=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      onAddToWishlist({id:Date.now(),name:json.name,brand:json.brand,price:productRes.price||json.price||0,emoji:json.emoji||"👗",gap:json.note||"Saved from URL",inMarket:false,sourceImage:productRes.image||null,color:json.color||"#C4A882",sourceUrl:url.trim()});
+      onClose();
+    }catch(e){ setScanning(false); }
+    setScanning(false);
+  };
 
-  return (
-    <div onClick={onClose} style={{..._fix,background:"#000000CC",zIndex:200,display:"flex",alignItems:"flex-start",paddingTop:60,justifyContent:"center"}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#0D0D0D",borderRadius:"28px 28px 0 0",width:"100%",maxWidth:430,border:_2a,animation:"fadeUp 0.35s ease forwards",maxHeight:"92vh",display:"flex",flexDirection:"column"}}>
+  const fetchDesc=async()=>{
+    if(!desc.trim()) return;
+    setDescLoading(true); setDescResults([]);
+    try{
+      const raw=await callClaude(`A user is describing an item they want for their wishlist: "${desc}"\nGenerate 4 specific matches with exact brand names and product names. Return ONLY JSON: {"results":[{"name":"...","brand":"...","price":150,"emoji":"👗","color":"#hexcode","note":"..."}]}`);
+      const json=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      const results=json.results||[];
+      // Fetch real product images in parallel via Google Image Search
+      const withImages=await Promise.all(results.map(async r=>{
+        try{
+          const imgRes=await fetch("/api/image-search",{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({query:`${r.brand} ${r.name} official product photo`})
+          }).then(x=>x.json()).catch(()=>({imageUrl:null}));
+          return {...r,imageUrl:imgRes.imageUrl||null};
+        }catch(e){ return {...r,imageUrl:null}; }
+      }));
+      setDescResults(withImages);
+    }catch(e){}
+    setDescLoading(false);
+  };
+
+  const addManual=()=>{
+    if(!wName.trim()){return;}
+    onAddToWishlist({id:Date.now(),name:wName.trim(),brand:wBrand.trim()||"Unknown",price:parseInt(wPrice)||0,emoji:"👗",gap:wGap.trim()||"Manually added",inMarket:false,sourceImage:null,color:wColor});
+    onClose();
+  };
+
+  const addedCount=Object.keys(added).length;
+
+  return(
+    <div onClick={onClose} style={{..._fix,background:"#000000CC",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#0D0D0D",borderRadius:"24px 24px 0 0",width:"100%",maxWidth:430,border:_2a,animation:"fadeUp 0.3s ease forwards",maxHeight:"92vh",display:"flex",flexDirection:"column"}}>
 
         {/* Header */}
-        <div style={{padding:"22px 22px 0",flexShrink:0}}>
-          <div style={{..._btwnS,marginBottom:4}}>
+        <div style={{padding:"20px 22px 0",flexShrink:0}}>
+          <div style={{..._btwn,marginBottom:4}}>
             <div>
-              <div style={{...sr(22,300),letterSpacing:1}}>Image Search</div>
-              <div style={ss(9,400,DM,{letterSpacing:2,marginTop:4})}>SCREENSHOT TO WISHLIST</div>
+              {mode&&<button onClick={reset} style={{background:"none",border:"none",cursor:_p,...ss(11,400,DM),marginBottom:4}}>← Back</button>}
+              <div style={sr(20,400)}>{!mode?"Add to Wishlist":mode==="photo"?"Scan Photo":mode==="url"?"Paste URL":mode==="describe"?"Describe Item":"Add Manually"}</div>
+              <div style={ss(9,400,DM,{letterSpacing:1,marginTop:2})}>{!mode?"CHOOSE HOW TO ADD":""}</div>
             </div>
             <button onClick={onClose} style={{width:32,height:32,borderRadius:"50%",background:_1a,border:_2a,display:"flex",alignItems:"center",justifyContent:"center",...ss(14,400,MD),cursor:_p}}>×</button>
           </div>
         </div>
 
-        <div className="sc" style={{flex:1,padding:"18px 22px 28px",overflowY:"auto"}}>
+        <div className="sc" style={{flex:1,padding:"16px 22px 32px",overflowY:"auto"}}>
 
-          {/* ── UPLOAD STAGE ── */}
-          {stage==="upload" && (
-            <>
-              {/* How it works */}
-              <div style={{background:"linear-gradient(135deg,#14101A,#1A1424)",borderRadius:16,padding:"14px 16px",border:"1px solid #2A2040",marginBottom:18}}>
-                <div style={ss(9,600,"#B0A0C4",{letterSpacing:1.5,textTransform:"uppercase",marginBottom:8})}>How it works</div>
-                <div style={{..._col,gap:8}}>
-                  {[
-                    ["📸","Upload any fashion screenshot or photo"],
-                    ["🔍","AI scans the image for clothing & accessories"],
-                    ["✦","Detected items are matched to real products"],
-                    ["♡","Add any items you love to your wishlist"],
-                  ].map(([ic,txt])=>(
-                    <div key={txt} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-                      <span style={{fontSize:14,flexShrink:0}}>{ic}</span>
-                      <span style={ss(10,400,DM,{lineHeight:1.5})}>{txt}</span>
-                    </div>
-                  ))}
+          {/* ── MODE SELECT ── */}
+          {!mode&&(
+            <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:8}}>
+              <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>{
+                if(e.target.files[0]){
+                  setMode("photo");
+                  setTimeout(()=>handlePhotoFile(e.target.files[0]),0);
+                }
+              }}/>
+
+              <button className="sb" onClick={()=>fileRef.current.click()} style={{width:"100%",padding:"18px 16px",borderRadius:16,background:_1a,border:_2a,display:"flex",alignItems:"center",gap:14,cursor:_p}}>
+                <div style={{width:48,height:48,borderRadius:14,background:`${G}22`,border:`1px solid ${G}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>📷</div>
+                <div style={{textAlign:"left"}}>
+                  <div style={ss(11,600,MD,{letterSpacing:1})}>SCAN FROM PHOTO</div>
+                  <div style={ss(9,400,DM,{marginTop:3})}>Upload a fashion photo — AI detects items</div>
+                  <div style={ss(8,400,G,{marginTop:2})}>AI identifies all items in the image</div>
                 </div>
-              </div>
-
-              {/* Drop zone */}
-              <div
-                onDrop={handleDrop}
-                onDragOver={e=>e.preventDefault()}
-                onClick={()=>fileRef.current?.click()}
-                style={{
-                  border:"1.5px dashed #3A3028",borderRadius:18,padding:"40px 24px",
-                  textAlign:"center",cursor:_p,marginBottom:16,
-                  background:"#0F0F0F",transition:"border-color 0.2s",
-                }}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=G}
-                onMouseLeave={e=>e.currentTarget.style.borderColor="#3A3028"}
-              >
-                <div style={{fontSize:42,marginBottom:12}}>📸</div>
-                <div style={sr(16,400,undefined,{marginBottom:6})}>Drop your screenshot here</div>
-                <div style={ss(10,400,DM,{marginBottom:16})}>or tap to browse your camera roll</div>
-                <div style={{display:"inline-block",padding:"10px 28px",borderRadius:20,background:`linear-gradient(135deg,${G},#8A6E54)`,...ss(10,600,BK,{letterSpacing:1.5})}}>
-                  CHOOSE IMAGE
-                </div>
-                <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])} />
-              </div>
-
-              {/* Demo button */}
-              <button onClick={()=>{setPreview("demo");setStage("scanning");runScan();}} style={{width:"100%",padding:"12px",borderRadius:14,background:_1a,border:_2a,...ss(10,400,DM,{letterSpacing:1}),cursor:_p}}>
-                ✦ Try with a sample image
+                <div style={{marginLeft:"auto",...ss(18,300,DM)}}>›</div>
               </button>
-            </>
-          )}
 
-          {/* ── SCANNING STAGE ── */}
-          {stage==="scanning" && (
-            <div style={{..._col,alignItems:"center",padding:"20px 0"}}>
-              {/* Image preview */}
-              <div style={{width:"100%",maxHeight:240,borderRadius:16,overflow:"hidden",marginBottom:24,background:_1a,display:"flex",alignItems:"center",justifyContent:"center",minHeight:160}}>
-                {preview && preview !== "demo" ? (
-                  <img src={preview} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="uploaded"/>
-                ) : (
-                  // Demo: show our outfit illustration SVG as the "screenshot"
-                  <div style={{width:"100%",height:220,position:"relative",overflow:"hidden"}}>
-                    <Portrait4/>
-                    {/* Overlay scanning boxes */}
-                    {scanPct>20&&<div style={{position:"absolute",top:"10%",left:"20%",width:"30%",height:"45%",border:"2px solid #C4A882",borderRadius:8,animation:"none",boxShadow:`0 0 12px ${G}44`}}/>}
-                    {scanPct>40&&<div style={{position:"absolute",top:"55%",left:"18%",width:"25%",height:"30%",border:"2px solid #A0B0D4",borderRadius:8,boxShadow:"0 0 12px #A0B0D444"}}/>}
-                    {scanPct>55&&<div style={{position:"absolute",top:"60%",left:"55%",width:"22%",height:"28%",border:"2px solid #A8C4A0",borderRadius:8,boxShadow:"0 0 12px #A8C4A044"}}/>}
-                    {scanPct>70&&<div style={{position:"absolute",top:"8%",left:"55%",width:"28%",height:"40%",border:"2px solid #C4A882",borderRadius:8,boxShadow:`0 0 12px ${G}44`}}/>}
-                  </div>
-                )}
-              </div>
-
-              {/* Progress */}
-              <div style={{width:"100%",marginBottom:16}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
-                  <div style={ss(10,400,MD)}>{scanMsg}</div>
-                  <div style={sr(13,500,G)}>{Math.round(scanPct)}%</div>
+              <button className="sb" onClick={()=>setMode("url")} style={{width:"100%",padding:"18px 16px",borderRadius:16,background:_1a,border:_2a,display:"flex",alignItems:"center",gap:14,cursor:_p}}>
+                <div style={{width:48,height:48,borderRadius:14,background:`${G}22`,border:`1px solid ${G}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🔗</div>
+                <div style={{textAlign:"left"}}>
+                  <div style={ss(11,600,MD,{letterSpacing:1})}>PASTE URL</div>
+                  <div style={ss(9,400,DM,{marginTop:3})}>Paste a product link from any store</div>
+                  <div style={ss(8,400,G,{marginTop:2})}>AI reads the item details automatically</div>
                 </div>
-                <div style={{height:4,background:_1a,borderRadius:4,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${scanPct}%`,background:`linear-gradient(90deg,${G},#8A6E54)`,borderRadius:4,transition:"width 0.2s ease"}}/>
-                </div>
-              </div>
+                <div style={{marginLeft:"auto",...ss(18,300,DM)}}>›</div>
+              </button>
 
-              {/* Animated detection pulses */}
-              <div style={{display:"flex",gap:8,marginTop:8}}>
-                {["Coat","Trousers","Boots","Bag","Jewelry"].map((label,i)=>(
-                  <div key={label} style={{
-                    padding:"4px 10px",borderRadius:20,
-                    background: scanPct > (i+1)*16 ? "#1A2418" : "#1A1A1A",
-                    border: `1px solid ${scanPct > (i+1)*16 ? "#4A6A3A" : "#2A2A2A"}`,
-                    ...ss(8,scanPct>(i+1)*16?600:400,scanPct>(i+1)*16?"#A8C4A0":DM,{letterSpacing:0.5}),
-                    transition:"all 0.3s"
-                  }}>
-                    {scanPct>(i+1)*16?"✓ ":""}{label}
-                  </div>
-                ))}
-              </div>
+              <button className="sb" onClick={()=>setMode("describe")} style={{width:"100%",padding:"18px 16px",borderRadius:14,background:"linear-gradient(135deg,#1A1424,#120E1C)",border:"1px solid #2A2040",display:"flex",alignItems:"center",gap:14,cursor:_p}}>
+                <div style={{width:48,height:48,borderRadius:14,background:"#2A2040",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:22}}>🎙️</div>
+                <div style={{textAlign:"left"}}>
+                  <div style={ss(10,600,"#C0B0D8",{letterSpacing:1})}>DESCRIBE YOUR ITEM</div>
+                  <div style={ss(8,400,"#6A5A88",{marginTop:3})}>Type what you're looking for — AI finds matches</div>
+                </div>
+                <div style={{marginLeft:"auto",...ss(14,300,"#3A2A58")}}>›</div>
+              </button>
+
+              <button className="sb" onClick={()=>setMode("manual")} style={{width:"100%",padding:"18px 16px",borderRadius:14,background:"linear-gradient(135deg,#0F1A14,#0C150F)",border:"1px solid #1E3028",display:"flex",alignItems:"center",gap:14,cursor:_p}}>
+                <div style={{width:48,height:48,borderRadius:14,background:"#1A3020",border:"1px solid #2A4030",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:22}}>✏️</div>
+                <div style={{textAlign:"left"}}>
+                  <div style={ss(10,600,"#80C8A0",{letterSpacing:1})}>ADD MANUALLY</div>
+                  <div style={ss(8,400,"#3A6048",{marginTop:3})}>Fill in all details yourself</div>
+                </div>
+                <div style={{marginLeft:"auto",...ss(14,300,"#2A4030")}}>›</div>
+              </button>
             </div>
           )}
 
-          {/* ── RESULTS STAGE ── */}
-          {stage==="results" && (
+          {/* ── PHOTO MODE ── */}
+          {mode==="photo"&&(
             <>
-              {/* Image + summary */}
-              <div style={{position:"relative",marginBottom:18}}>
-                <div style={{width:"100%",borderRadius:16,overflow:"hidden",maxHeight:180,background:_1a,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  {preview && (
-                    <img src={preview} style={{width:"100%",objectFit:"cover",maxHeight:180}} alt="analyzed"/>
-                  )}
-                </div>
-                <div style={{position:"absolute",top:10,right:10,background:"linear-gradient(135deg,#0F1A0F,#162416)",border:"1px solid #2A3A2A",borderRadius:12,padding:"6px 12px"}}>
-                  <div style={ss(9,600,"#A8C4A0",{letterSpacing:1})}>{detected.length} ITEMS FOUND</div>
-                </div>
-              </div>
-
-              <div style={ss(9,400,DM,{letterSpacing:1.5,textTransform:"uppercase",marginBottom:12})}>Detected Items — Select to Wishlist</div>
-
-              {detected.map(item=>{
-                const isAdded = !!added[item.id];
-                return(
-                  <div key={item.id} onClick={()=>toggleAdd(item)} style={{
-                    background: isAdded ? "linear-gradient(135deg,#1A160F,#1E1A12)" : CD,
-                    borderRadius:16, padding:"14px 16px", marginBottom:10,
-                    border: `1.5px solid ${isAdded ? G : BR}`,
-                    cursor:_p, transition:"all 0.2s",
-                    boxShadow: isAdded ? `0 0 0 2px ${G}22` : "none",
-                  }}>
-                    <div style={{..._row,gap:12}}>
-                      <div style={{position:"relative",flexShrink:0}}>
-                        <div style={{width:52,height:52,borderRadius:14,background:_1a,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,border:_2a}}>
-                          {item.emoji||"👗"}
-                        </div>
-                        <div style={{position:"absolute",bottom:-4,left:"50%",transform:"translateX(-50%)",background:item.confidence>90?"#1A2A1A":"#1A1A1A",border:`1px solid ${item.confidence>90?"#4A6A3A":"#3A3A3A"}`,borderRadius:10,padding:"1px 6px",...ss(7,600,item.confidence>90?"#A8C4A0":"#8A9888",{letterSpacing:0.5})}}>
-                          {item.confidence}%
-                        </div>
-                      </div>
-
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={sr(14,500,isAdded?G:undefined,{lineHeight:1.3})}>{item.name}</div>
-                        <div style={ss(9,400,DM,{marginTop:2})}>{item.brand}</div>
-                        <div style={ss(9,400,"#9A8878",{marginTop:3,lineHeight:1.4})}>{item.note}</div>
-                        <div style={sr(13,500,G,{marginTop:4})}>{item.price}</div>
-                      </div>
-
-                      <div style={{width:26,height:26,borderRadius:8,background:isAdded?G:"#1A1A1A",border:`1.5px solid ${isAdded?G:"#3A3028"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.2s",...ss(13,700,BK)}}>
-                        {isAdded?"✓":""}
-                      </div>
-                    </div>
+              {scanStage==="scanning"&&(
+                <div style={{textAlign:"center",padding:"32px 0"}}>
+                  {photoPreview&&<div style={{width:"100%",borderRadius:14,overflow:"hidden",maxHeight:180,marginBottom:20}}><img src={photoPreview} style={{width:"100%",objectFit:"cover",maxHeight:180}} alt="scan"/></div>}
+                  <div style={{fontSize:44,marginBottom:16,animation:"pulse 1.2s infinite"}}>🔍</div>
+                  <div style={sr(16,400,G,{marginBottom:6})}>{scanMsg}</div>
+                  <div style={{height:3,background:_1a,borderRadius:2,overflow:"hidden",marginTop:12}}>
+                    <div style={{height:"100%",width:`${scanPct}%`,background:`linear-gradient(90deg,${G},#8A6E54)`,borderRadius:2,transition:"width 0.3s"}}/>
                   </div>
-                );
-              })}
-
-              <div style={{position:"sticky",bottom:0,background:"linear-gradient(transparent,#0D0D0D 30%)",paddingTop:16,marginTop:4}}>
-                <div style={{display:"flex",gap:10}}>
-                  <button onClick={()=>{setStage("upload");setPreview(null);setScanPct(0);setDetected([]);setAdded({});}} style={{flex:1,padding:"12px",borderRadius:14,background:_1a,border:_2a,...ss(9,600,DM,{letterSpacing:1}),cursor:_p}}>
-                    NEW SEARCH
-                  </button>
-                  <button onClick={confirmAll} disabled={addedCount===0} style={{flex:2,padding:"12px",borderRadius:14,background:addedCount>0?`linear-gradient(135deg,${G},#8A6E54)`:"#1A1A1A",border:"none",...ss(9,600,addedCount>0?BK:"#3A3028",{letterSpacing:1}),cursor:addedCount>0?"pointer":"default",transition:"all 0.2s"}}>
-                    {addedCount>0?`ADD ${addedCount} ITEM${addedCount>1?"S":""} TO WISHLIST`:"SELECT ITEMS TO ADD"}
-                  </button>
                 </div>
-              </div>
+              )}
+              {scanStage==="results"&&(
+                <>
+                  {photoPreview&&<div style={{width:"100%",borderRadius:14,overflow:"hidden",maxHeight:160,marginBottom:14,position:"relative"}}><img src={photoPreview} style={{width:"100%",objectFit:"cover",maxHeight:160}} alt="scan"/><div style={{position:"absolute",top:8,right:8,background:"linear-gradient(135deg,#0F1A0F,#162416)",border:"1px solid #2A3A2A",borderRadius:10,padding:"5px 10px",...ss(9,600,"#A8C4A0",{letterSpacing:1})}}>{detected.length} ITEMS FOUND</div></div>}
+                  <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:12})}>SELECT ITEMS TO ADD TO WISHLIST</div>
+                  {detected.map(item=>{
+                    const isSel=!!added[item.id];
+                    return(
+                      <div key={item.id} onClick={()=>setAdded(p=>isSel?Object.fromEntries(Object.entries(p).filter(([k])=>k!==String(item.id))):({...p,[item.id]:true}))}
+                        style={{background:isSel?"linear-gradient(135deg,#1A160F,#1E1A12)":CD,borderRadius:14,padding:"12px 14px",marginBottom:8,border:`1.5px solid ${isSel?G:BR}`,cursor:_p,transition:"all 0.2s"}}>
+                        <div style={{..._row,gap:10}}>
+                          <div style={{width:44,height:44,borderRadius:12,background:_1a,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,border:_2a,flexShrink:0}}>{item.emoji||"👗"}</div>
+                          <div style={{flex:1}}>
+                            <div style={sr(14,500,isSel?G:undefined)}>{item.name}</div>
+                            <div style={ss(9,400,DM,{marginTop:2})}>{item.brand} · {item.price}</div>
+                          </div>
+                          <div style={{width:24,height:24,borderRadius:7,background:isSel?G:_1a,border:`1.5px solid ${isSel?G:"#3A3028"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...ss(12,700,BK)}}>{isSel?"✓":""}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    <button onClick={()=>{setScanStage("upload");setPhotoPreview(null);setDetected([]);setAdded({});}} style={{flex:1,padding:"11px",borderRadius:12,background:_1a,border:_2a,...ss(9,600,DM,{letterSpacing:1}),cursor:_p}}>NEW SCAN</button>
+                    <button onClick={confirmPhoto} disabled={addedCount===0} style={{flex:2,padding:"11px",borderRadius:12,background:addedCount>0?`linear-gradient(135deg,${G},#8A6E54)`:"#1A1A1A",border:"none",...ss(9,600,addedCount>0?BK:"#3A3028",{letterSpacing:1}),cursor:addedCount>0?_p:"default"}}>
+                      {addedCount>0?`ADD ${addedCount} TO WISHLIST`:"SELECT ITEMS"}
+                    </button>
+                  </div>
+                </>
+              )}
+              {scanStage==="error"&&(
+                <div style={{textAlign:"center",padding:"32px 0"}}>
+                  <div style={{fontSize:32,marginBottom:12}}>⚠️</div>
+                  <div style={sr(16,300,G,{marginBottom:8})}>Scan failed</div>
+                  <button onClick={()=>{setScanStage("upload");setPhotoPreview(null);}} style={{padding:"10px 24px",borderRadius:20,background:G,border:"none",...ss(9,700,BK,{letterSpacing:1}),cursor:_p}}>TRY AGAIN</button>
+                </div>
+              )}
             </>
           )}
 
-          {/* ── ERROR STAGE ── */}
-          {stage==="error" && (
-            <div style={{textAlign:"center",padding:"40px 0"}}>
-              <div style={{fontSize:32,marginBottom:12}}>⚠️</div>
-              <div style={sr(18,300,G,{marginBottom:8})}>Analysis failed</div>
-              <div style={ss(10,400,DM,{marginBottom:20})}>Couldn't reach the AI. Check your connection and try again.</div>
-              <button onClick={()=>{setStage("upload");setPreview(null);setScanPct(0);}} style={{padding:"10px 24px",borderRadius:20,background:G,border:"none",...ss(9,700,BK,{letterSpacing:1}),cursor:_p}}>TRY AGAIN</button>
+          {/* ── URL MODE ── */}
+          {mode==="url"&&(
+            <div style={{marginTop:8}}>
+              <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:8})}>PASTE PRODUCT URL</div>
+              <div style={{display:"flex",gap:8,marginBottom:14}}>
+                <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://store.com/item…"
+                  style={{flex:1,background:_1a,border:_2a,borderRadius:12,padding:"11px 14px",...ss(11,400,MD),color:"#C0B8B0",outline:"none"}}/>
+                <button onClick={fetchUrl} disabled={scanning||!url.trim()} style={{padding:"11px 16px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,BK,{letterSpacing:1}),cursor:_p}}>
+                  {scanning?"…":"FIND"}
+                </button>
+              </div>
+              <div style={ss(9,400,DM,{lineHeight:1.6})}>AI will read the item name, brand, and price from the page and add it directly to your wishlist.</div>
+            </div>
+          )}
+
+          {/* ── DESCRIBE MODE ── */}
+          {mode==="describe"&&(
+            <div style={{marginTop:8}}>
+              <div style={ss(9,400,DM,{letterSpacing:1,marginBottom:8,textAlign:"center"})}>DESCRIBE WHAT YOU'RE LOOKING FOR</div>
+              <textarea value={desc} onChange={e=>{setDesc(e.target.value);setDescResults([]);}} placeholder='e.g. "cream linen blazer from COS" or "strappy heeled sandal"'
+                rows={3} style={{width:"100%",background:_1a,border:_2a,borderRadius:12,padding:"11px 14px",...ss(11,400,MD),color:"#C0B8B0",resize:"none",boxSizing:"border-box",lineHeight:1.6,marginBottom:10,outline:"none"}}/>
+              {desc.trim()&&!descLoading&&descResults.length===0&&(
+                <button onClick={fetchDesc} style={{width:"100%",padding:"11px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,700,BK,{letterSpacing:1.5}),cursor:_p}}>FIND MATCHES</button>
+              )}
+              {descLoading&&<div style={{textAlign:"center",padding:"24px 0"}}><div style={{fontSize:28,marginBottom:8,animation:"spin 1s linear infinite"}}>✦</div><div style={ss(9,400,DM)}>Finding matches…</div></div>}
+              {descResults.length>0&&(
+                <div>
+                  <div style={ss(9,600,DM,{letterSpacing:1.5,marginBottom:10})}>SELECT THE BEST MATCH</div>
+                  {descResults.map((r,i)=>(
+                    <div key={i} onClick={()=>{onAddToWishlist({id:Date.now()+i,name:r.name,brand:r.brand,price:r.price||0,emoji:r.emoji||"👗",gap:r.note||"Saved from description",inMarket:false,sourceImage:r.imageUrl||null,color:r.color||"#C4A882"});onClose();}}
+                      className="ch" style={{background:CD,borderRadius:14,border:`1px solid ${BR}`,display:"flex",gap:12,padding:"12px",cursor:_p,alignItems:"center",marginBottom:8}}>
+                      <div style={{width:56,height:56,borderRadius:12,background:`${r.color||G}22`,flexShrink:0,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",border:_2a}}>
+                        {r.imageUrl
+                          ? <img src={r.imageUrl} style={{width:"100%",height:"100%",objectFit:"cover"}} alt={r.name}
+                              onError={e=>{e.target.style.display="none";e.target.parentNode.innerHTML=`<span style="font-size:24px">${r.emoji||"👗"}</span>`;}}/>
+                          : <span style={{fontSize:24}}>{r.emoji||"👗"}</span>
+                        }
+                      </div>
+                      <div style={{flex:1}}>
+                        <div style={sr(14,500)}>{r.name}</div>
+                        <div style={ss(9,400,DM,{marginTop:2})}>{r.brand}</div>
+                        <div style={sr(13,400,G,{marginTop:3})}>${r.price}</div>
+                      </div>
+                      <div style={{...ss(11,400,G),flexShrink:0}}>→</div>
+                    </div>
+                  ))}
+                  <button onClick={()=>{setDescResults([]);}} style={{width:"100%",marginTop:4,padding:"10px",borderRadius:12,background:_1a,border:_2a,...ss(9,400,MD,{letterSpacing:1}),cursor:_p}}>TRY DIFFERENT DESCRIPTION</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── MANUAL MODE ── */}
+          {mode==="manual"&&(
+            <div style={{marginTop:8}}>
+              <div style={{marginBottom:12}}>
+                <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>ITEM NAME *</div>
+                <input value={wName} onChange={e=>setWName(e.target.value)} placeholder="e.g. Chelsea Boots" style={iStyle}/>
+              </div>
+              <div style={{marginBottom:12}}>
+                <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>BRAND</div>
+                <input value={wBrand} onChange={e=>setWBrand(e.target.value)} placeholder="e.g. Sezane, & Other Stories…" style={iStyle}/>
+              </div>
+              <div style={{marginBottom:12}}>
+                <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>PRICE ($)</div>
+                <input value={wPrice} onChange={e=>setWPrice(e.target.value.replace(/\D/g,""))} placeholder="0" inputMode="numeric" style={iStyle}/>
+              </div>
+              <div style={{marginBottom:12}}>
+                <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:6})}>WHY I WANT IT (OPTIONAL)</div>
+                <input value={wGap} onChange={e=>setWGap(e.target.value)} placeholder="e.g. Need transitional footwear" style={iStyle}/>
+              </div>
+              <div style={{marginBottom:20}}>
+                <div style={ss(9,400,DM,{letterSpacing:1.5,marginBottom:8})}>COLOR</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                  {colorSwatches.map(({name,hex})=>(
+                    <button key={hex} onClick={()=>setWColor(hex)} title={name} style={{width:30,height:30,borderRadius:"50%",background:hex,cursor:_p,border:wColor===hex?`3px solid ${G}`:"2px solid #2A2A2A",boxShadow:wColor===hex?`0 0 0 2px ${G}66`:"none",flexShrink:0,outline:"none"}}/>
+                  ))}
+                </div>
+                <div style={ss(9,400,DM,{marginTop:6})}>Selected: <span style={{color:G}}>{colorSwatches.find(c=>c.hex===wColor)?.name||"Custom"}</span></div>
+              </div>
+              <button onClick={addManual} disabled={!wName.trim()} style={{width:"100%",padding:"13px",borderRadius:14,background:wName.trim()?`linear-gradient(135deg,${G},#8A6E54)`:"#1A1A1A",border:"none",...ss(10,700,wName.trim()?BK:"#3A3028",{letterSpacing:1.5}),cursor:wName.trim()?_p:"default"}}>
+                ADD TO WISHLIST
+              </button>
             </div>
           )}
 
@@ -3514,7 +4896,6 @@ function ReverseSearchModal({onClose, onAddToWishlist}){
     </div>
   );
 }
-
 
 async function callClaude(prompt, systemPrompt) {
   const res = await fetch("/api/claude", {
@@ -3552,7 +4933,7 @@ async function callClaudeVision(base64Image, mediaType, prompt) {
   return data.content?.[0]?.text || "";
 }
 
-function DiscoverTab({showToast,wishlist,setWishlist,items}){
+function DiscoverTab({showToast,wishlist,setWishlist,addToWishlist,items}){
   const [view,setView]=useState("pairings");
   const [selectedTrend,setSelectedTrend]=useState(null);
 
@@ -3565,10 +4946,51 @@ function DiscoverTab({showToast,wishlist,setWishlist,items}){
   // AI state — gaps
   const [aiGaps,setAiGaps]=useState(null);
   const [gapScore,setGapScore]=useState(null);
+  const [scoreBreakdown,setScoreBreakdown]=useState(null);
   const [gapsLoading,setGapsLoading]=useState(false);
   const [gapsError,setGapsError]=useState(null);
+  const prevView = useRef(null);
 
-  const closetSummary = items.map(i=>`${i.name} (${i.category}, ${i.brand||"no brand"}, worn ${i.wears||0}x)`).join("; ");
+  // ── Deterministic score calculations ─────────────────────────────────────────
+  const calcVersatility = (items) => {
+    const coreCategories = ["Tops","Bottoms","Shoes"];
+    const bonusCategories = ["Dresses","Outerwear","Accessories"];
+    const cats = new Set(items.map(i=>i.category));
+    const coreHave = coreCategories.filter(c=>cats.has(c)).length;
+    const bonusHave = bonusCategories.filter(c=>cats.has(c)).length;
+    const score = Math.min(20, Math.round((coreHave/3)*14 + (bonusHave/3)*6));
+    const missing = [...coreCategories,...bonusCategories].filter(c=>!cats.has(c));
+    const label = score>=18?"Excellent":score>=14?"Good":score>=10?"Fair":"Needs work";
+    const note = missing.length===0
+      ? "You have all core categories covered."
+      : `Missing: ${missing.slice(0,3).join(", ")}`;
+    return {score,label,note};
+  };
+
+  const calcUtilization = (items) => {
+    if(!items.length) return {score:0,label:"No data",note:"Add items to your closet."};
+    const worn = items.filter(i=>i.wearCount>0).length;
+    const pct = worn/items.length;
+    const score = Math.round(pct*20);
+    const unworn = items.length - worn;
+    const label = score>=18?"Excellent":score>=14?"Good":score>=10?"Fair":"Needs work";
+    const note = unworn===0
+      ? "Every item has been worn at least once."
+      : `${unworn} item${unworn>1?"s":""} never worn — consider selling or donating.`;
+    return {score,label,note};
+  };
+
+  const calcValueEfficiency = (items) => {
+    const wornItems = items.filter(i=>i.wearCount>0&&i.price>0);
+    if(!wornItems.length) return {score:10,label:"Not enough data",note:"Wear more items to build your cost-per-wear."};
+    const avgCPW = wornItems.reduce((s,i)=>s+(i.price/i.wearCount),0)/wornItems.length;
+    const score = avgCPW<=5?20:avgCPW<=15?17:avgCPW<=30?14:avgCPW<=60?10:6;
+    const label = score>=17?"Excellent":score>=14?"Good":score>=10?"Fair":"Needs work";
+    const note = `Avg cost-per-wear: $${avgCPW.toFixed(2)}. ${score>=17?"Great value from your wardrobe.":"Wear items more to improve this."}`;
+    return {score,label,note,avgCPW};
+  };
+
+  const closetSummary = items.map(i=>`${i.name} (${i.category}, ${i.brand||"no brand"}, worn ${i.wearCount||0}x, $${i.price})`).join("; ");
 
   const loadPairings = async () => {
     setPairingsLoading(true); setPairingsError(null);
@@ -3589,27 +5011,54 @@ function DiscoverTab({showToast,wishlist,setWishlist,items}){
 
   const loadGaps = async () => {
     setGapsLoading(true); setGapsError(null);
+
+    // Compute deterministic dimensions immediately
+    const versatility = calcVersatility(items);
+    const utilization = calcUtilization(items);
+    const valueEff = calcValueEfficiency(items);
+
     try {
       const raw = await callClaude(
-        `My wardrobe: ${closetSummary}. Analyse gaps and give me a wardrobe completeness score out of 100, and 3 specific missing pieces I should add. Respond ONLY with JSON: {"score":74,"gaps":[{"emoji":"👜","gap":"Missing piece name","suggestion":"Why I need it and what style","price":"$100-300"},...]}`
+        `I have ${items.length} clothing items. My wardrobe: ${closetSummary}.
+
+Rate my wardrobe on TWO dimensions (0-20 points each) and identify 3 missing pieces. Be honest and specific — don't just give high scores.
+
+Cohesion (0-20): Do the items work together? Consider color palette harmony, style consistency, and whether pieces can be mixed and matched. Deduct points for clashing styles or too many one-off pieces.
+
+Completeness (0-20): How well does this wardrobe cover different life occasions (work, casual, evening, weekend, travel)? Deduct points for obvious gaps in lifestyle coverage.
+
+Respond ONLY with this exact JSON:
+{"cohesion":{"score":14,"label":"Good","note":"one sentence explanation"},"completeness":{"score":12,"label":"Fair","note":"one sentence explanation"},"gaps":[{"emoji":"👜","gap":"item name","suggestion":"why needed and style suggestion","price":"$X-Y"},{"emoji":"🥾","gap":"item name","suggestion":"why needed","price":"$X-Y"},{"emoji":"🧣","gap":"item name","suggestion":"why needed","price":"$X-Y"}]}`
       );
       const json = JSON.parse(raw.replace(/```json|```/g,"").trim());
-      setGapScore(json.score);
-      setAiGaps(json.gaps);
+      const total = versatility.score + utilization.score + valueEff.score + (json.cohesion?.score||10) + (json.completeness?.score||10);
+      setGapScore(total);
+      setScoreBreakdown({
+        versatility,
+        utilization,
+        valueEfficiency: valueEff,
+        cohesion: json.cohesion || {score:10,label:"Fair",note:"Style analysis unavailable."},
+        completeness: json.completeness || {score:10,label:"Fair",note:"Coverage analysis unavailable."},
+        total,
+      });
+      setAiGaps(json.gaps||[]);
     } catch(e) {
-      // Silently fall back to static gaps — no error shown on mobile
-      setGapScore(74);
+      // Fallback: show deterministic scores with placeholder AI scores
+      const cohesion = {score:12,label:"Good",note:"Your neutral palette creates a cohesive base."};
+      const completeness = {score:11,label:"Fair",note:"Add evening and travel pieces to improve coverage."};
+      const total = versatility.score + utilization.score + valueEff.score + cohesion.score + completeness.score;
+      setGapScore(total);
+      setScoreBreakdown({versatility,utilization,valueEfficiency:valueEff,cohesion,completeness,total});
       setAiGaps([
-        {emoji:"👜",gap:"No structured bag",suggestion:"A Toteme or Polene tote would complete your office looks.",price:"$200-500"},
-        {emoji:"🥾",gap:"No ankle boots",suggestion:"Chelsea boots in tan or black bridge casual and evening.",price:"$150-350"},
-        {emoji:"🧣",gap:"No silk scarf",suggestion:"A printed silk scarf adds color without bold commitment.",price:"$80-200"},
+        {emoji:"👜",gap:"Structured tote bag",suggestion:"A Polene or Toteme tote completes office and weekend looks.",price:"$200-500"},
+        {emoji:"🥾",gap:"Ankle boots",suggestion:"Chelsea boots in tan or black bridge casual and evening.",price:"$150-350"},
+        {emoji:"🧣",gap:"Silk scarf",suggestion:"Adds color and versatility without a bold commitment.",price:"$80-200"},
       ]);
     }
     setGapsLoading(false);
   };
 
   // Auto-load when switching to tab
-  const prevView = useRef(null);
   useEffect(()=>{
     if(view==="pairings" && prevView.current!=="pairings" && !aiPairings.length && !pairingsLoading) loadPairings();
     if(view==="gaps" && prevView.current!=="gaps" && !aiGaps && !gapsLoading) loadGaps();
@@ -3753,21 +5202,77 @@ function DiscoverTab({showToast,wishlist,setWishlist,items}){
           )}
           {!gapsLoading && (
             <>
-              <div style={{background:"linear-gradient(135deg,#1A160F,#1E1A12)",borderRadius:16,padding:"16px",border:"1px solid #2A2418",marginBottom:16}}>
-                <Lbl mb={8}>Wardrobe Score</Lbl>
-                <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
-                  <div style={sr(40,300,G)}>{gapScore||74}</div>
-                  <div style={ss(10,400,DM)}>/100</div>
-                </div>
-                <div style={{height:6,background:_1a,borderRadius:4,overflow:"hidden",marginBottom:8}}>
-                  <div style={{height:"100%",width:`${gapScore||74}%`,background:`linear-gradient(90deg,${G},#8A6E54)`,borderRadius:4}} />
-                </div>
-                <div style={ss(10,400,DM)}>Fill {gaps.length} key gaps to reach 90+</div>
-              </div>
+              {/* ── SCORE CARD ── */}
+              {(()=>{
+                const bd = scoreBreakdown;
+                const total = bd?.total || gapScore || 0;
+                const scoreColor = total>=80?"#80C880":total>=65?G:"#C4A060";
+                const dims = bd ? [
+                  {key:"versatility",   label:"Versatility",       icon:"🗂",  desc:"Category coverage",      ...bd.versatility},
+                  {key:"utilization",   label:"Utilization",       icon:"📊",  desc:"Items actually worn",    ...bd.utilization},
+                  {key:"valueEff",      label:"Value Efficiency",  icon:"💰",  desc:"Cost-per-wear",          ...bd.valueEfficiency},
+                  {key:"cohesion",      label:"Cohesion",          icon:"🎨",  desc:"Style consistency",      ...bd.cohesion},
+                  {key:"completeness",  label:"Completeness",      icon:"✦",   desc:"Occasion coverage",      ...bd.completeness},
+                ] : [];
+                return(
+                  <div style={{background:"linear-gradient(135deg,#1A160F,#1E1A12)",borderRadius:18,padding:"20px",border:"1px solid #2A2418",marginBottom:16}}>
+                    {/* Total score header */}
+                    <div style={{..._btwn,marginBottom:16}}>
+                      <div>
+                        <Lbl mb={4}>Wardrobe Score</Lbl>
+                        <div style={ss(9,400,DM,{lineHeight:1.5,maxWidth:200})}>Based on 5 dimensions · updates as your closet grows</div>
+                      </div>
+                      <div style={{textAlign:"center"}}>
+                        <div style={{...sr(48,300,scoreColor),lineHeight:1}}>{total}</div>
+                        <div style={ss(10,400,DM)}>/100</div>
+                      </div>
+                    </div>
+                    {/* Total bar */}
+                    <div style={{height:8,background:"#1A1A1A",borderRadius:4,overflow:"hidden",marginBottom:20}}>
+                      <div style={{height:"100%",width:`${total}%`,background:`linear-gradient(90deg,${scoreColor},${G})`,borderRadius:4,transition:"width 0.8s ease"}}/>
+                    </div>
+
+                    {/* Dimension breakdown */}
+                    {dims.map((d,i)=>(
+                      <div key={d.key} style={{marginBottom:i<dims.length-1?14:0,paddingBottom:i<dims.length-1?14:0,borderBottom:i<dims.length-1?`1px solid #2A2418`:"none"}}>
+                        <div style={{..._btwn,marginBottom:5}}>
+                          <div style={{..._row,gap:8}}>
+                            <span style={{fontSize:14}}>{d.icon}</span>
+                            <div>
+                              <div style={ss(10,600,MD,{letterSpacing:0.5})}>{d.label}</div>
+                              <div style={ss(8,400,DM,{letterSpacing:0.5})}>{d.desc}</div>
+                            </div>
+                          </div>
+                          <div style={{..._row,gap:6,flexShrink:0}}>
+                            <div style={{...ss(9,600,d.score>=16?"#80C880":d.score>=12?G:"#C4A060"),background:"#0D0D0D",padding:"2px 8px",borderRadius:8}}>
+                              {d.label}
+                            </div>
+                            <div style={{...sr(16,500,MD),minWidth:32,textAlign:"right"}}>{d.score}<span style={ss(9,400,DM)}>/20</span></div>
+                          </div>
+                        </div>
+                        {/* Dimension bar */}
+                        <div style={{height:3,background:"#1A1A1A",borderRadius:2,overflow:"hidden",marginBottom:5}}>
+                          <div style={{height:"100%",width:`${(d.score/20)*100}%`,background:d.score>=16?"#80C880":d.score>=12?G:"#C4A060",borderRadius:2,transition:"width 0.8s ease"}}/>
+                        </div>
+                        <div style={ss(9,400,DM,{lineHeight:1.5,fontStyle:"italic"})}>{d.note}</div>
+                      </div>
+                    ))}
+
+                    {!bd&&(
+                      <div style={{textAlign:"center",padding:"8px 0"}}>
+                        <button onClick={loadGaps} style={{padding:"8px 20px",borderRadius:20,background:`${G}22`,border:`1px solid ${G}44`,...ss(9,600,G,{letterSpacing:1}),cursor:_p}}>CALCULATE MY SCORE</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* ── GAPS ── */}
+              <div style={ss(8,600,DM,{letterSpacing:1.5,marginBottom:10})}>KEY GAPS TO ADDRESS</div>
               {gaps.map((g,i)=>(
                 <div key={i} style={{background:CD,borderRadius:18,padding:"16px 18px",marginBottom:12,border:`1px solid ${BR}`}}>
                   <div style={{display:"flex",gap:12,marginBottom:10}}>
-                    <ItemIllustration item={{emoji:g.emoji}} size={40}/>
+                    <div style={{width:40,height:40,borderRadius:12,background:`${G}18`,border:`1px solid ${G}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{g.emoji}</div>
                     <div style={{flex:1}}>
                       <div style={sr(15,500,undefined,{marginBottom:3})}>{g.gap}</div>
                       <div style={ss(10,400,DM,{lineHeight:1.5})}>{g.suggestion}</div>
@@ -3777,14 +5282,16 @@ function DiscoverTab({showToast,wishlist,setWishlist,items}){
                     <div style={sr(13,400,G)}>{g.price}</div>
                     <button className="pb" onClick={()=>{
                       if(!wishlist.find(w=>w.gap===g.gap)){
-                        setWishlist(prev=>[...prev,{id:Date.now(),emoji:g.emoji,name:g.gap,brand:"TBD",price:parseInt(g.price.replace(/\D.*$/,"")),gap:g.gap,inMarket:false}]);
+                        const newItem={id:Date.now(),emoji:g.emoji,name:g.gap,brand:"TBD",price:parseInt(g.price.replace(/\D.*$/,"")),gap:g.gap,inMarket:false};
+                        if(addToWishlist) addToWishlist(newItem);
+                        else setWishlist(prev=>[...prev,newItem]);
                       }
                       showToast("Added to wishlist \u2746");
-                    }} style={{padding:"6px 14px",borderRadius:20,background:_1a,border:_2a,...ss(9,400,MD,{letterSpacing:1})}}>+ WISHLIST</button>
+                    }} style={{padding:"6px 14px",borderRadius:20,background:_1a,border:_2a,...ss(9,400,MD,{letterSpacing:1}),cursor:_p}}>+ WISHLIST</button>
                   </div>
                 </div>
               ))}
-              <Btn onClick={loadGaps} full>{gapsLoading?"ANALYZING…":"MORE RESULTS"}</Btn>
+              <Btn onClick={loadGaps} full>{gapsLoading?"ANALYZING…":"REFRESH SCORE"}</Btn>
             </>
           )}
         </>
@@ -3816,6 +5323,219 @@ const clothingLayers = {
 const getLayer=(emoji)=>clothingLayers[emoji]||{label:"Item",layer:"acc",draw:(c)=>`<text x="290" y="295" text-anchor="middle" font-size="36">${emoji}</text>`};
 const layerOrder=["dress","coat","top","bottom","shoes","acc"];
 
+function MirrorModal({items,outfitItemIds,outfitName,onClose}){
+  const [selectedIds,setSelectedIds]=useState(outfitItemIds||[]);
+  const [photoStage,setPhotoStage]=useState("prompt"); // prompt | ready
+  const [skin,setSkin]=useState(2);
+  const [hair,setHair]=useState(1);
+  const fileRef=useRef(null);
+
+  const skins=["#F5DEB3","#E8C4A0","#C8906A","#A06040","#6A3820"];
+  const hairCols=["#F0DCA0","#8B6914","#4A2C0A","#1A0A0A","#C0C0C0"];
+  const sc=skins[skin]; const hc=hairCols[hair];
+
+  const outfitItems=selectedIds.map(id=>items.find(i=>i.id===id)).filter(Boolean);
+  const toggle=(id)=>setSelectedIds(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
+
+  // Build ordered layers
+  const layerMap={};
+  outfitItems.forEach(it=>{
+    const def=getLayer(it.emoji);
+    if(!layerMap[def.layer]) layerMap[def.layer]=[];
+    layerMap[def.layer].push({...def,color:it.color,item:it});
+  });
+  const orderedLayers=layerOrder.flatMap(l=>layerMap[l]||[]);
+
+  // Label positions per layer type
+  const labelPos=(def,it)=>{
+    if(def.layer==="shoes") return {x:190,y:438};
+    if(def.layer==="bottom") return {x:190,y:340};
+    if(def.layer==="dress") return {x:190,y:290};
+    if(def.layer==="coat"||def.layer==="top") return {x:190,y:220};
+    if(it.emoji==="👜"||it.emoji==="💼") return {x:298,y:300};
+    if(it.emoji==="🧣") return {x:190,y:175};
+    return {x:190,y:160};
+  };
+
+  return(
+    <div style={{..._fix,background:"#060504",zIndex:300,display:"flex",flexDirection:"column",maxWidth:430,margin:"0 auto"}}>
+
+      {/* Header */}
+      <div style={{padding:"18px 20px 14px",borderBottom:"1px solid #1A1A1A",flexShrink:0,background:"#0A0908",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div>
+          <div style={{...sr(24,300,"#F0EBE3"),letterSpacing:3}}>The Mirror</div>
+          {outfitName&&<div style={ss(8,400,DM,{letterSpacing:2,marginTop:3})}>{outfitName.toUpperCase()}</div>}
+        </div>
+        <IconBtn onClick={onClose}>×</IconBtn>
+      </div>
+
+      {/* First-use: photo prompt */}
+      {photoStage==="prompt"&&(
+        <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"32px 28px",gap:16,background:"#0A0908"}}>
+          <div style={{fontSize:54,marginBottom:4}}>🪞</div>
+          <div style={sr(22,400,undefined,{textAlign:"center"})}>Set up your Mirror</div>
+          <div style={ss(10,400,DM,{textAlign:"center",lineHeight:1.75,maxWidth:280})}>Take a full-body photo and outfits will be previewed on you. Your photo stays on your device — never uploaded.</div>
+          <div style={{display:"flex",gap:12,width:"100%",marginTop:8}}>
+            <button onClick={()=>fileRef.current?.click()} style={{flex:1,padding:"18px 12px",borderRadius:16,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,600,BK,{letterSpacing:1}),cursor:_p,display:"flex",flexDirection:"column",alignItems:"center",gap:7}}>
+              <span style={{fontSize:26}}>📸</span>TAKE PHOTO
+            </button>
+            <button onClick={()=>fileRef.current?.click()} style={{flex:1,padding:"18px 12px",borderRadius:16,background:_1a,border:_2a,...ss(10,600,MD,{letterSpacing:1}),cursor:_p,display:"flex",flexDirection:"column",alignItems:"center",gap:7}}>
+              <span style={{fontSize:26}}>🖼️</span>UPLOAD
+            </button>
+          </div>
+          <button onClick={()=>setPhotoStage("ready")} style={{width:"100%",padding:"14px",borderRadius:14,background:"#141414",border:_2a,...ss(9,400,DM,{letterSpacing:1.5}),cursor:_p,marginTop:4}}>
+            USE ILLUSTRATED AVATAR
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={()=>setPhotoStage("ready")}/>
+        </div>
+      )}
+
+      {/* Mirror canvas + controls */}
+      {photoStage==="ready"&&(
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+
+          {/* SVG canvas */}
+          <div style={{flex:1,position:"relative",background:"linear-gradient(180deg,#1C1810 0%,#0E0C09 100%)",overflow:"hidden",minHeight:0}}>
+            {/* Subtle dot-grid texture */}
+            <div style={{..._abs0,backgroundImage:"radial-gradient(#2A2418 1px,transparent 1px)",backgroundSize:"22px 22px",opacity:0.25,pointerEvents:"none"}}/>
+            {/* Floor reflection glow */}
+            <div style={{position:"absolute",bottom:0,left:"50%",transform:"translateX(-50%)",width:200,height:60,background:`radial-gradient(ellipse,${G}18 0%,transparent 70%)`,pointerEvents:"none"}}/>
+
+            <div style={{..._abs0,display:"flex",alignItems:"flex-end",justifyContent:"center",paddingBottom:8}}>
+              <svg viewBox="0 0 380 480" fill="none" xmlns="http://www.w3.org/2000/svg"
+                style={{height:"100%",maxHeight:"100%",width:"auto"}}>
+                <defs>
+                  <linearGradient id="mirSkin" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={sc}/>
+                    <stop offset="100%" stopColor={sc} stopOpacity="0.88"/>
+                  </linearGradient>
+                </defs>
+
+                {/* Shadow on floor */}
+                <ellipse cx="190" cy="448" rx="88" ry="10" fill="#000000" opacity="0.35"/>
+
+                {/* ── BASE FIGURE — skin underneath clothing ── */}
+                {/* Legs */}
+                <path d="M155 262 L146 438 L168 438 L180 284 L200 284 L212 438 L234 438 L225 262Z" fill="url(#mirSkin)"/>
+                {/* Torso */}
+                <path d="M152 156 C146 172,143 216,145 262 L235 262 C237 216,234 172,228 156 C218 149,206 145,190 145 C174 145,162 149,152 156Z" fill="url(#mirSkin)"/>
+                {/* Arms */}
+                <path d="M152 158 C138 174,128 210,130 248 L146 245 C146 215,150 182,158 167Z" fill="url(#mirSkin)"/>
+                <path d="M228 158 C242 174,252 210,250 248 L234 245 C234 215,230 182,222 167Z" fill="url(#mirSkin)"/>
+                {/* Hands */}
+                <ellipse cx="138" cy="253" rx="10" ry="13" fill={sc}/>
+                <ellipse cx="242" cy="253" rx="10" ry="13" fill={sc}/>
+                {/* Feet */}
+                <path d="M140 435 C128 437,116 441,114 447 L168 447 L170 435Z" fill={sc}/>
+                <path d="M210 435 C222 437,234 441,236 447 L182 447 L180 435Z" fill={sc}/>
+
+                {/* ── CLOTHING LAYERS ── */}
+                {orderedLayers.map((layer,i)=>(
+                  <g key={i} dangerouslySetInnerHTML={{__html:layer.draw(layer.color||"#666666")}}/>
+                ))}
+
+                {/* ── HEAD (always on top of clothing) ── */}
+                <path d="M181 118 L181 149 L199 149 L199 118Z" fill={sc}/>
+                <ellipse cx="190" cy="89" rx="34" ry="38" fill={sc}/>
+                {/* Hair */}
+                <path d={`M157 79 C154 49,168 25,190 23 C212 25,226 49,223 79 C218 63,207 55,200 59 L190 51 L180 59 C173 55,162 63,157 79Z`} fill={hc}/>
+                {[1,2].includes(hair)&&<>
+                  <path d="M157 79 C151 97,150 115,154 131 C158 137,166 139,172 136 C167 123,162 107,165 91Z" fill={hc}/>
+                  <path d="M223 79 C229 97,230 115,226 131 C222 137,214 139,208 136 C213 123,218 107,215 91Z" fill={hc}/>
+                </>}
+                {hair===0&&<ellipse cx="192" cy="42" rx="16" ry="12" fill={hc}/>}
+                {/* Eyes */}
+                <circle cx="178" cy="87" r="4.5" fill={hc==="#C0C0C0"?"#2A2A2A":hc} opacity="0.9"/>
+                <circle cx="202" cy="87" r="4.5" fill={hc==="#C0C0C0"?"#2A2A2A":hc} opacity="0.9"/>
+                <circle cx="179" cy="86" r="1.8" fill="#FFFFFF" opacity="0.7"/>
+                <circle cx="203" cy="86" r="1.8" fill="#FFFFFF" opacity="0.7"/>
+                {/* Brows */}
+                <path d="M172 77 C176 74,182 74,186 76" stroke={hc} strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+                <path d="M194 76 C198 74,204 74,208 77" stroke={hc} strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+                {/* Lips */}
+                <path d="M183 101 Q190 107,197 101" stroke="#A06050" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+                {/* Cheeks */}
+                <ellipse cx="175" cy="96" rx="6" ry="3.5" fill="#E09080" opacity="0.14"/>
+                <ellipse cx="205" cy="96" rx="6" ry="3.5" fill="#E09080" opacity="0.14"/>
+
+                {/* ── NUMBERED ITEM PINS ── */}
+                {outfitItems.map((it,i)=>{
+                  const def=getLayer(it.emoji);
+                  const pos=labelPos(def,it);
+                  return(
+                    <g key={it.id}>
+                      <circle cx={pos.x} cy={pos.y} r="9" fill="#0D0D0D" opacity="0.75"/>
+                      <circle cx={pos.x} cy={pos.y} r="8" fill={G}/>
+                      <text x={pos.x} y={pos.y+0.5} textAnchor="middle" dominantBaseline="middle" fontSize="9" fill={BK} fontFamily="Montserrat,sans-serif" fontWeight="700">{i+1}</text>
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+
+            {/* Legend — bottom left float */}
+            {outfitItems.length>0&&(
+              <div style={{position:"absolute",bottom:12,left:12,display:"flex",flexDirection:"column",gap:5,maxWidth:"55%"}}>
+                {outfitItems.map((it,i)=>(
+                  <div key={it.id} style={{..._row,gap:6,background:"#060504CC",backdropFilter:"blur(6px)",borderRadius:20,padding:"5px 10px 5px 5px",border:`1px solid ${G}28`}}>
+                    <div style={{width:18,height:18,borderRadius:"50%",background:G,display:"flex",alignItems:"center",justifyContent:"center",...ss(8,700,BK),flexShrink:0}}>{i+1}</div>
+                    <div style={ss(9,500,"#E8E0D4",{lineHeight:1.2,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"})}>{it.name}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Empty state */}
+            {outfitItems.length===0&&(
+              <div style={{..._abs0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}>
+                <div style={{fontSize:36,opacity:0.2}}>🪞</div>
+                <div style={sr(14,300,"#3A3028",{fontStyle:"italic",textAlign:"center"})}>Select items below<br/>to build your look</div>
+              </div>
+            )}
+          </div>
+
+          {/* Appearance controls */}
+          <div style={{padding:"10px 18px 8px",background:"#0A0908",borderTop:"1px solid #181818",borderBottom:"1px solid #181818",display:"flex",gap:14,alignItems:"center",flexShrink:0}}>
+            <div style={ss(8,400,DM,{letterSpacing:1.5,flexShrink:0})}>SKIN</div>
+            {skins.map((s,i)=>(
+              <button key={i} onClick={()=>setSkin(i)} style={{width:22,height:22,borderRadius:"50%",background:s,border:skin===i?`2.5px solid ${G}`:"2px solid transparent",cursor:_p,flexShrink:0}}/>
+            ))}
+            <div style={{width:1,height:16,background:"#222",flexShrink:0}}/>
+            <div style={ss(8,400,DM,{letterSpacing:1.5,flexShrink:0})}>HAIR</div>
+            {hairCols.map((h,i)=>(
+              <button key={i} onClick={()=>setHair(i)} style={{width:22,height:22,borderRadius:"50%",background:h,border:hair===i?`2.5px solid ${G}`:"2px solid transparent",cursor:_p,flexShrink:0}}/>
+            ))}
+          </div>
+
+          {/* Item selector strip */}
+          <div style={{padding:"12px 16px 18px",background:"#0A0908",flexShrink:0}}>
+            <div style={ss(8,400,DM,{letterSpacing:1.5,marginBottom:10})}>TAP ITEMS TO ADD OR REMOVE</div>
+            <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>
+              {items.map(it=>{
+                const on=selectedIds.includes(it.id);
+                return(
+                  <button key={it.id} onClick={()=>toggle(it.id)} style={{flexShrink:0,width:64,borderRadius:14,overflow:"hidden",border:`1.5px solid ${on?G:"#252525"}`,background:on?"#18140C":"#141414",cursor:_p,padding:0,transition:"all 0.18s"}}>
+                    <div style={{height:52,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,background:on?`linear-gradient(135deg,${it.color}28,${it.color}48)`:"#1C1C1C",position:"relative"}}>
+                      <ItemIllustration item={it} size={38}/>
+                      {on&&<div style={{position:"absolute",bottom:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${G},#8A6E54)`}}/>}
+                    </div>
+                    <div style={{padding:"5px 4px 7px",textAlign:"center"}}>
+                      <div style={{...ss(7.5,on?600:400,on?G:"#484038"),letterSpacing:0.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name.split(" ")[0]}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── VACATION PLANNER
+// Weather helpers — emoji + label maps
+const CONDITION_EMOJI = {"Clear":"☀️","Sunny":"☀️","Mostly Sunny":"🌤️","Partly Cloudy":"⛅","Mostly Cloudy":"🌥️","Overcast":"☁️","Foggy":"🌫️","Drizzle":"🌦️","Light Rain":"🌦️","Rain":"🌧️","Heavy Rain":"🌧️","Showers":"🌧️","Thunderstorm":"⛈️","Snow":"❄️","Light Snow":"🌨️","Blizzard":"❄️","Hail":"⛈️","Windy":"💨","Hot":"🌞","Humid":"🌊"};
 function condEmoji(label){ return CONDITION_EMOJI[label] || "🌤️"; }
 
 // Derive climate tag from AI daily data
@@ -3842,17 +5562,11 @@ function parseTripDate(str, fallbackYear=2026){
   return `${yr}-${String(mo).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`;
 }
 
-// Use Claude API to estimate weather — works within the sandbox
+// Use Claude API to estimate weather
 async function fetchTripWeather(destination, startDate, endDate){
-  const prompt = `Give a day-by-day weather forecast for ${destination} from ${startDate} to ${endDate}. Use your knowledge of typical seasonal climate for this location and time of year. Use Fahrenheit for temperatures. Respond ONLY with a JSON object, no markdown:
-{"city":"${destination.split(",")[0].trim()}","days":[{"date":"YYYY-MM-DD","condition":"Partly Cloudy","tempMax":72,"tempMin":57},...]}`; 
-  const res = await fetch("/api/claude",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:"You are a weather assistant. Always respond with valid JSON only, no markdown, no explanation.",messages:[{role:"user",content:prompt}]})
-  });
-  const data = await res.json();
-  const raw = data.content?.[0]?.text||"";
+  const prompt = `Give a day-by-day weather forecast for ${destination} from ${startDate} to ${endDate}. Use your knowledge of typical seasonal climate for this location and time of year. Use Fahrenheit for temperatures. Respond ONLY with a JSON object, no markdown, no explanation:
+{"city":"${destination.split(",")[0].trim()}","days":[{"date":"YYYY-MM-DD","condition":"Partly Cloudy","tempMax":72,"tempMin":57},...]}`;
+  const raw = await callClaude(prompt, "You are a weather assistant. Always respond with valid JSON only, no markdown, no explanation.");
   const clean = raw.replace(/```json|```/g,"").trim();
   let parsed;
   try { parsed = JSON.parse(clean); }
@@ -3888,80 +5602,163 @@ const sampleVacation = {
   ],
 };
 
-function VacationPlanner({items,outfits,showToast,onBack}){
-  const [vacation,setVacation]=useState(sampleVacation);
+function VacationPlanner({items,outfits,showToast,onBack,session}){
+  const [trips,setTrips]=useState([]);
+  const [vacation,setVacation]=useState(null);
   const [activeDay,setActiveDay]=useState(null);
-  const [view,setView]=useState("itinerary"); // itinerary | packing
+  const [view,setView]=useState("itinerary");
   const [newTrip,setNewTrip]=useState(false);
+  const [tripsLoading,setTripsLoading]=useState(true);
   const [form,setForm]=useState({name:"",destination:"",startDate:"",endDate:"",climate:"Warm & Sunny"});
-
-  // Weather state
-  const [weather,setWeather]=useState(null); // {daily:[{date,tempMax,tempMin,code}], city, country, climate}
+  const [destSuggestions,setDestSuggestions]=useState([]);
+  const [destLoading,setDestLoading]=useState(false);
+  const [showDestList,setShowDestList]=useState(false);
+  const destTimer=useRef(null);
+  const [weather,setWeather]=useState(null);
   const [wxLoading,setWxLoading]=useState(false);
-  const [wxError,setWxError]=useState(null);
-  const [formWx,setFormWx]=useState(null);  // weather preview while creating a new trip
+  const [formWx,setFormWx]=useState(null);
   const [formWxLoading,setFormWxLoading]=useState(false);
+  const [packed,setPacked]=useState({});
+  const [aiItineraryLoading,setAiItineraryLoading]=useState(false);
+  const [editingDay,setEditingDay]=useState(null); // day index being edited
+  const [editDayForm,setEditDayForm]=useState({label:"",activity:"",emoji:""});
+  const [showOutfitPicker,setShowOutfitPicker]=useState(null); // day index for outfit picker
+  const [outfitSearch,setOutfitSearch]=useState("");
+  const togglePacked=(id)=>setPacked(p=>({...p,[id]:!p[id]}));
+  const climates=["Warm & Sunny","Cold & Snowy","Tropical & Humid","Mediterranean","Rainy & Cool"];
 
-  // Auto-fetch weather when planner loads (stable deps to avoid re-fetch loop)
-  const dest=vacation.destination;
-  const tripStart=vacation.startDate;
-  const tripEnd=vacation.endDate;
+  // ── Load trips from Supabase ──
   useEffect(()=>{
-    const start=parseTripDate(tripStart);
-    const end=parseTripDate(tripEnd);
+    if(!session?.access_token){ setTripsLoading(false); return; }
+    (async()=>{
+      try{
+        const userId=session.user?.id;
+        if(!userId){ setTripsLoading(false); return; }
+        const res=await fetch(`${SB_URL}/rest/v1/trips?user_id=eq.${userId}&order=created_at.desc`,{
+          headers:{"Authorization":`Bearer ${session.access_token}`,"apikey":SB_KEY}
+        });
+        if(!res.ok){ setTripsLoading(false); return; }
+        const data=await res.json();
+        if(Array.isArray(data)&&data.length>0){
+          const mapped=data.map(r=>({
+            id:r.id,name:r.name,destination:r.destination,
+            startDate:r.start_date,endDate:r.end_date,climate:r.climate||"Warm & Sunny",
+            days_plan:r.days_plan||[],
+          }));
+          setTrips(mapped);
+          setVacation(mapped[0]);
+        }
+      }catch(e){ console.error("trips load error:",e); }
+      setTripsLoading(false);
+    })();
+  },[session]);
+
+  // ── Save trip to Supabase ──
+  const saveTripToDB=async(trip)=>{
+    if(!session?.access_token) return trip;
+    const userId=session.user?.id;
+    try{
+      const body={user_id:userId,name:trip.name,destination:trip.destination,
+        start_date:trip.startDate,end_date:trip.endDate,climate:trip.climate,days_plan:trip.days_plan};
+      if(trip.id&&typeof trip.id==="string"&&trip.id.length>10){
+        await fetch(`${SB_URL}/rest/v1/trips?id=eq.${trip.id}`,{
+          method:"PATCH",headers:{"Content-Type":"application/json","Authorization":`Bearer ${session.access_token}`,"apikey":SB_KEY},
+          body:JSON.stringify(body)
+        });
+        return trip;
+      } else {
+        const res=await fetch(`${SB_URL}/rest/v1/trips`,{
+          method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${session.access_token}`,"apikey":SB_KEY,"Prefer":"return=representation"},
+          body:JSON.stringify(body)
+        });
+        const rows=await res.json();
+        return rows?.[0]?{...trip,id:rows[0].id}:trip;
+      }
+    }catch(e){ return trip; }
+  };
+
+  // ── Update vacation in state + DB ──
+  const updateVacation=async(updated)=>{
+    setVacation(updated);
+    setTrips(prev=>prev.map(t=>t.id===updated.id?updated:t));
+    await saveTripToDB(updated);
+  };
+
+  // ── Auto-fetch weather on trip change ──
+  useEffect(()=>{
+    if(!vacation?.destination||!vacation?.startDate||!vacation?.endDate) return;
+    const start=parseTripDate(vacation.startDate);
+    const end=parseTripDate(vacation.endDate);
     if(!start||!end) return;
     let cancelled=false;
-    setWxLoading(true); setWxError(null); setWeather(null);
-    fetchTripWeather(dest, start, end)
-      .then(data=>{ if(!cancelled){ setWeather(data); } })
+    setWxLoading(true); setWeather(null);
+    fetchTripWeather(vacation.destination,start,end)
+      .then(data=>{ if(!cancelled) setWeather(data); })
       .catch(()=>{
-        // Silently show a placeholder forecast based on vacation's climate tag
         if(!cancelled){
-          const climate = vacation.climate||"Mild";
-          const baseMax = climate.includes("Warm")||climate.includes("Hot") ? 76 : climate.includes("Cold") ? 45 : 64;
-          const days = [];
-          for(let i=0;i<vacation.days;i++){
-            const d = new Date(start); d.setDate(d.getDate()+i);
+          const climate=vacation.climate||"Mild";
+          const baseMax=climate.includes("Warm")||climate.includes("Hot")?76:climate.includes("Cold")?45:64;
+          const days=[];
+          for(let i=0;i<Math.max(1,vacation.days_plan?.length||7);i++){
+            const d=new Date(start); d.setDate(d.getDate()+i);
             days.push({date:d.toISOString().slice(0,10),condition:climate.includes("Sunny")?"Sunny":climate.includes("Rain")?"Rainy":"Partly Cloudy",tempMax:baseMax+Math.round(Math.random()*6-3),tempMin:baseMax-14+Math.round(Math.random()*4-2)});
           }
-          setWeather({daily:days,city:dest.split(",")[0],climate});
+          setWeather({daily:days,city:vacation.destination.split(",")[0],climate});
         }
       })
       .finally(()=>{ if(!cancelled) setWxLoading(false); });
     return ()=>{ cancelled=true; };
-  },[dest, tripStart, tripEnd]);
+  },[vacation?.destination,vacation?.startDate,vacation?.endDate]);
 
-  // Helper: get weather for a given trip date string (e.g. "Apr 13")
   const wxForDate=(dateStr)=>{
     if(!weather?.daily) return null;
     const key=parseTripDate(dateStr);
     return weather.daily.find(d=>d.date===key)||null;
   };
 
-  // Derive master packing list from all outfit items across all days
-  const allItemIds=[...new Set(vacation.days_plan.flatMap(d=>d.outfitIds))];
-  const packingItems=allItemIds.map(id=>items.find(i=>i.id===id)).filter(Boolean);
+  // ── Generate itinerary with AI ──
+  const generateItinerary=async(tripData)=>{
+    setAiItineraryLoading(true);
+    try{
+      const raw=await callClaude(
+        `Create a day-by-day travel itinerary for a trip to ${tripData.destination} from ${tripData.startDate} to ${tripData.endDate}. Climate: ${tripData.climate}. 
+For each day provide a label (what you'll do), activity type, and emoji. Calculate the exact number of days.
+Respond ONLY with JSON: {"days":[{"day":1,"date":"${tripData.startDate}","label":"Arrival & Check-in","activity":"Travel","emoji":"✈️"},...]}`
+      );
+      const json=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      return (json.days||[]).map(d=>({...d,outfitIds:[],packed:false}));
+    }catch(e){
+      // Fallback: generate basic skeleton from dates
+      const start=parseTripDate(tripData.startDate);
+      if(!start) return [];
+      const end=parseTripDate(tripData.endDate);
+      const startD=new Date(start), endD=end?new Date(end):new Date(start);
+      const numDays=Math.max(1,Math.round((endD-startD)/(1000*60*60*24))+1);
+      return Array.from({length:numDays},(_,i)=>{
+        const d=new Date(startD); d.setDate(d.getDate()+i);
+        const dateStr=d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+        return{day:i+1,date:dateStr,label:i===0?"Arrival":`Day ${i+1}`,activity:i===0?"Travel":"Explore",emoji:i===0?"✈️":"🗺️",outfitIds:[],packed:false};
+      });
+    } finally { setAiItineraryLoading(false); }
+  };
 
-  // Extra essentials not in closet
+  // ── Packing list ──
+  const allOutfitItemIds=[...new Set((vacation?.days_plan||[]).flatMap(d=>d.outfitIds||[]))];
+  const packingItems=allOutfitItemIds.map(id=>items.find(i=>i.id===id)).filter(Boolean);
   const essentials=[
-    {id:"e1",emoji:"🧴",name:"Sunscreen SPF 50",category:"Toiletries",packed:false},
-    {id:"e2",emoji:"💊",name:"Travel medications",category:"Health",packed:false},
-    {id:"e3",emoji:"🔌",name:"Universal adapter",category:"Tech",packed:false},
-    {id:"e4",emoji:"📄",name:"Passport & documents",category:"Documents",packed:false},
-    {id:"e5",emoji:"💳",name:"Travel cards & cash",category:"Documents",packed:false},
-    {id:"e6",emoji:"🕶️",name:"Sunglasses",category:"Accessories",packed:false},
-    {id:"e7",emoji:"👙",name:"Swimsuit",category:"Clothing",packed:false},
-    {id:"e8",emoji:"🧳",name:"Packing cubes",category:"Luggage",packed:false},
+    {id:"e1",emoji:"🧴",name:"Sunscreen SPF 50",category:"Toiletries"},
+    {id:"e2",emoji:"💊",name:"Travel medications",category:"Health"},
+    {id:"e3",emoji:"🔌",name:"Universal adapter",category:"Tech"},
+    {id:"e4",emoji:"📄",name:"Passport & documents",category:"Documents"},
+    {id:"e5",emoji:"💳",name:"Travel cards & cash",category:"Documents"},
+    {id:"e6",emoji:"🕶️",name:"Sunglasses",category:"Accessories"},
+    {id:"e7",emoji:"🧳",name:"Packing cubes",category:"Luggage"},
   ];
-  const [packed,setPacked]=useState({});
-  const togglePacked=(id)=>setPacked(p=>({...p,[id]:!p[id]}));
-
   const totalPacked=Object.values(packed).filter(Boolean).length;
   const totalItems=packingItems.length+essentials.length;
-  const pct=Math.round((totalPacked/totalItems)*100);
+  const pct=totalItems>0?Math.round((totalPacked/totalItems)*100):0;
 
-  const climates=["Warm & Sunny","Cold & Snowy","Tropical & Humid","Mediterranean","Rainy & Cool"];
-
+  // ── NEW TRIP FORM ──
   if(newTrip){
     return(
       <div className="fu" style={{padding:"16px 24px"}}>
@@ -3970,48 +5767,76 @@ function VacationPlanner({items,outfits,showToast,onBack}){
           <div style={sr(20,400)}>Plan a New Trip</div>
         </div>
         <div style={{..._col,gap:12}}>
-          {[["Trip Name","name","e.g. Paris Honeymoon"],["Destination","destination","City, Country"]].map(([label,key,ph])=>(
-            <div key={key}>
-              <div style={ss(9,400,DM,{letterSpacing:1.5,textTransform:"uppercase",marginBottom:6})}>{label}</div>
-              <input value={form[key]} onChange={e=>setForm(p=>({...p,[key]:e.target.value}))}
-                placeholder={ph} style={{width:"100%",background:_1a,border:_2a,borderRadius:12,padding:"12px 14px",...ss(13,400,MD),color:"#C0B8B0"}} />
-            </div>
-          ))}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            {[["Start Date","startDate","Apr 12"],["End Date","endDate","Apr 19"]].map(([label,key,ph])=>(
-              <div key={key}>
-                <div style={ss(9,400,DM,{letterSpacing:1.5,textTransform:"uppercase",marginBottom:6})}>{label}</div>
-                <input value={form[key]} onChange={e=>setForm(p=>({...p,[key]:e.target.value}))}
-                  placeholder={ph} style={{width:"100%",background:_1a,border:_2a,borderRadius:12,padding:"12px 14px",...ss(13,400,MD),color:"#C0B8B0"}} />
-              </div>
-            ))}
+          <div>
+            <div style={ss(9,400,DM,{letterSpacing:1.5,textTransform:"uppercase",marginBottom:6})}>Trip Name</div>
+            <input value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))}
+              placeholder="e.g. Paris Honeymoon" style={{width:"100%",boxSizing:"border-box",background:_1a,border:_2a,borderRadius:12,padding:"12px 14px",...ss(13,400,MD),color:"#C0B8B0",outline:"none"}} />
           </div>
+          {/* Destination autocomplete */}
+          <div style={{position:"relative"}}>
+            <div style={ss(9,400,DM,{letterSpacing:1.5,textTransform:"uppercase",marginBottom:6})}>Destination</div>
+            <div style={{..._row,gap:8,background:_1a,border:showDestList?`1px solid ${G}66`:_2a,borderRadius:12,padding:"12px 14px"}}>
+              <input value={form.destination} onChange={e=>{
+                  const v=e.target.value; setForm(p=>({...p,destination:v})); setShowDestList(true);
+                  clearTimeout(destTimer.current);
+                  if(v.length<2){setDestSuggestions([]);return;}
+                  setDestLoading(true);
+                  destTimer.current=setTimeout(async()=>{
+                    try{
+                      const res=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(v)}&format=json&limit=6&addressdetails=1`,{headers:{"Accept-Language":"en"}});
+                      const data=await res.json();
+                      const seen=new Set();
+                      const suggestions=data.map(r=>{
+                        const city=r.address?.city||r.address?.town||r.address?.village||r.address?.county||r.name;
+                        const country=r.address?.country||"";
+                        return country&&city!==country?`${city}, ${country}`:city;
+                      }).filter(l=>{if(!l||seen.has(l))return false;seen.add(l);return true;});
+                      setDestSuggestions(suggestions);
+                    }catch(e){setDestSuggestions([]);}
+                    setDestLoading(false);
+                  },350);
+                }}
+                onFocus={()=>{if(form.destination.length>=2)setShowDestList(true);}}
+                onBlur={()=>setTimeout(()=>setShowDestList(false),150)}
+                placeholder="City, Country"
+                style={{flex:1,background:"none",border:"none",outline:"none",...ss(13,400,MD),color:"#C0B8B0"}}/>
+              {destLoading&&<span style={{fontSize:12,animation:"spin 1s linear infinite",display:"inline-block",opacity:0.5}}>✦</span>}
+              {form.destination&&!destLoading&&<button onClick={()=>{setForm(p=>({...p,destination:""}));setDestSuggestions([]);}} style={{background:"none",border:"none",cursor:_p,...ss(12,400,DM)}}>✕</button>}
+            </div>
+            {showDestList&&destSuggestions.length>0&&(
+              <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"#1A1A1A",borderRadius:"0 0 12px 12px",border:`1px solid ${G}44`,borderTop:"none",overflow:"hidden",marginTop:-2}}>
+                {destSuggestions.map((s,i)=>(
+                  <div key={i} onMouseDown={()=>{setForm(p=>({...p,destination:s}));setDestSuggestions([]);setShowDestList(false);}}
+                    style={{padding:"11px 14px",cursor:_p,borderTop:i>0?`1px solid #2A2A2A`:"none",display:"flex",alignItems:"center",gap:10,...ss(13,400,MD)}} className="ch">
+                    <span style={{fontSize:14,opacity:0.5}}>📍</span>{s}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <FullDatePicker label="Start Date" value={form.startDate} onChange={v=>setForm(p=>({...p,startDate:v}))}/>
+            <FullDatePicker label="End Date" value={form.endDate} onChange={v=>setForm(p=>({...p,endDate:v}))}/>
+          </div>
+          {/* Climate */}
           <div>
             <div style={ss(9,400,DM,{letterSpacing:1.5,textTransform:"uppercase",marginBottom:8})}>Climate</div>
-            {/* Auto-detect button */}
             <button className="pb" disabled={!form.destination||!form.startDate||!form.endDate||formWxLoading}
               onClick={async()=>{
-                const s=parseTripDate(form.startDate);
-                const e=parseTripDate(form.endDate);
+                const s=parseTripDate(form.startDate),e=parseTripDate(form.endDate);
                 if(!s||!e){showToast("Enter valid dates first");return;}
                 setFormWxLoading(true);setFormWx(null);
-                try{
-                  const data=await fetchTripWeather(form.destination,s,e);
-                  setFormWx(data);
-                  setForm(p=>({...p,climate:data.climate}));
-                  showToast(`Weather detected: ${data.climate} ✦`);
-                }catch(err){showToast("Could not detect weather — pick manually");}
+                try{const data=await fetchTripWeather(form.destination,s,e);setFormWx(data);setForm(p=>({...p,climate:data.climate}));showToast(`Weather detected: ${data.climate} ✦`);}
+                catch(err){showToast("Could not detect weather — pick manually");}
                 finally{setFormWxLoading(false);}
               }}
               style={{..._row,gap:8,padding:"9px 16px",borderRadius:20,background:formWxLoading?"#1A1A1A":G,border:"none",...ss(9,600,formWxLoading?DM:BK,{letterSpacing:1}),cursor:_p,marginBottom:12,opacity:(!form.destination||!form.startDate||!form.endDate)?0.5:1}}>
               {formWxLoading?<>✦ DETECTING…</>:<>☁️ AUTO-DETECT WEATHER</>}
             </button>
-            {/* Weather preview */}
             {formWx&&(
               <div style={{background:"#0D1928",borderRadius:14,padding:"10px 14px",border:"1px solid #1A2A40",marginBottom:12}}>
-                <div style={ss(8,400,"#5A7090",{letterSpacing:2,textTransform:"uppercase",marginBottom:8})}>{formWx.city} Forecast</div>
                 <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2}}>
-                  {formWx.daily.map(d=>(
+                  {formWx.daily.slice(0,7).map(d=>(
                     <div key={d.date} style={{flexShrink:0,textAlign:"center",background:"#091420",borderRadius:10,padding:"6px 8px",minWidth:42}}>
                       <div style={{fontSize:16,marginBottom:3}}>{condEmoji(d.condition)}</div>
                       <div style={ss(8,600,"#A0C0E0")}>{d.tempMax}°</div>
@@ -4023,20 +5848,77 @@ function VacationPlanner({items,outfits,showToast,onBack}){
             )}
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {climates.map(c=>(
-                <button key={c} className="pb" onClick={()=>setForm(p=>({...p,climate:c}))} style={{padding:"7px 14px",borderRadius:20,background:form.climate===c?G:"#1A1A1A",border:form.climate===c?"none":"1px solid #222",...ss(9,form.climate===c?600:400,form.climate===c?BK:DM,{letterSpacing:1})}}>
-                  {c}
-                </button>
+                <button key={c} className="pb" onClick={()=>setForm(p=>({...p,climate:c}))} style={{padding:"7px 14px",borderRadius:20,background:form.climate===c?G:"#1A1A1A",border:form.climate===c?"none":"1px solid #222",...ss(9,form.climate===c?600:400,form.climate===c?BK:DM,{letterSpacing:1})}}>{c}</button>
               ))}
             </div>
           </div>
-          <div style={{marginTop:8}}>
-            <Btn onClick={()=>{if(form.name&&form.destination){showToast("Trip created! Start planning your days ❆");setNewTrip(false);}else{showToast("Please fill in trip name and destination");}}} full>CREATE TRIP</Btn>
+          <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:8}}>
+            <button disabled={!form.name||!form.destination||aiItineraryLoading} onClick={async()=>{
+              if(!form.name||!form.destination){showToast("Please fill in name and destination");return;}
+              const newTripData={id:null,name:form.name,destination:form.destination,startDate:form.startDate,endDate:form.endDate,climate:form.climate,days_plan:[]};
+              showToast("Generating your itinerary… ✦");
+              const days=await generateItinerary(newTripData);
+              newTripData.days_plan=days;
+              const saved=await saveTripToDB(newTripData);
+              setTrips(prev=>[saved,...prev]);
+              setVacation(saved);
+              setNewTrip(false);
+              showToast("Trip created ✦");
+            }} style={{width:"100%",padding:"14px",borderRadius:14,background:aiItineraryLoading||!form.name||!form.destination?"#1A1A1A":`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,700,aiItineraryLoading||!form.name||!form.destination?"#3A3028":BK,{letterSpacing:1.5}),cursor:_p}}>
+              {aiItineraryLoading?"✦ GENERATING ITINERARY…":"✦ CREATE TRIP WITH AI ITINERARY"}
+            </button>
+            <button disabled={!form.name||!form.destination} onClick={async()=>{
+              if(!form.name||!form.destination){showToast("Please fill in name and destination");return;}
+              // Build empty skeleton from dates
+              const start=parseTripDate(form.startDate);
+              const end=parseTripDate(form.endDate);
+              const days=[];
+              if(start){
+                const startD=new Date(start),endD=end?new Date(end):new Date(start);
+                const numDays=Math.max(1,Math.round((endD-startD)/(1000*60*60*24))+1);
+                for(let i=0;i<numDays;i++){
+                  const d=new Date(startD); d.setDate(d.getDate()+i);
+                  const dateStr=d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+                  days.push({day:i+1,date:dateStr,label:i===0?"Arrival":`Day ${i+1}`,activity:i===0?"Travel":"",emoji:i===0?"✈️":"📅",outfitIds:[],packed:false});
+                }
+              }
+              const newTripData={id:null,name:form.name,destination:form.destination,startDate:form.startDate,endDate:form.endDate,climate:form.climate,days_plan:days};
+              const saved=await saveTripToDB(newTripData);
+              setTrips(prev=>[saved,...prev]);
+              setVacation(saved);
+              setNewTrip(false);
+              showToast("Trip created — fill in your own itinerary ✦");
+            }} style={{width:"100%",padding:"14px",borderRadius:14,background:_1a,border:_2a,...ss(10,600,MD,{letterSpacing:1}),cursor:_p}}>
+              ADD MY OWN ITINERARY
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
+  // ── NO TRIPS STATE ──
+  if(tripsLoading){
+    return(
+      <div className="fu" style={{display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16,padding:40}}>
+        <div style={{fontSize:32,animation:"spin 1.2s linear infinite"}}>✦</div>
+        <div style={ss(11,400,DM,{letterSpacing:1})}>Loading your trips…</div>
+      </div>
+    );
+  }
+
+  if(!vacation){
+    return(
+      <div className="fu" style={{padding:"16px 24px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,textAlign:"center",minHeight:"50vh"}}>
+        <div style={{fontSize:52}}>✈️</div>
+        <div style={sr(22,300)}>No trips planned yet</div>
+        <div style={ss(10,400,DM,{lineHeight:1.6,maxWidth:260})}>Plan your first trip and let AI build your day-by-day itinerary and packing list.</div>
+        <button onClick={()=>setNewTrip(true)} style={{padding:"13px 28px",borderRadius:14,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,700,BK,{letterSpacing:1.5}),cursor:_p}}>+ PLAN A TRIP</button>
+      </div>
+    );
+  }
+
+  // ── MAIN PLANNER VIEW ──
   return(
     <div className="fu" style={{padding:"16px 24px"}}>
       {/* Header */}
@@ -4046,48 +5928,40 @@ function VacationPlanner({items,outfits,showToast,onBack}){
           <div style={sr(22,300)}>Vacation Planner</div>
           <div style={ss(10,400,DM,{letterSpacing:1,marginTop:2})}>ITINERARY · OUTFITS · PACKING</div>
         </div>
-        <button className="sb" onClick={()=>setNewTrip(true)} style={{padding:"6px 14px",borderRadius:20,background:_1a,border:_2a,...ss(9,400,MD,{letterSpacing:1}),cursor:_p}}>+ NEW TRIP</button>
+        <button className="sb" onClick={()=>setNewTrip(true)} style={{padding:"6px 14px",borderRadius:20,background:_1a,border:_2a,...ss(9,400,MD,{letterSpacing:1}),cursor:_p}}>+ NEW</button>
       </div>
 
-      {/* Trip hero card */}
+      {/* Trip selector if multiple trips */}
+      {trips.length>1&&(
+        <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:8,marginBottom:12}}>
+          {trips.map(t=>(
+            <button key={t.id} onClick={()=>setVacation(t)} style={{flexShrink:0,padding:"6px 14px",borderRadius:20,background:vacation?.id===t.id?G:_1a,border:vacation?.id===t.id?"none":_2a,...ss(9,vacation?.id===t.id?600:400,vacation?.id===t.id?BK:DM,{letterSpacing:0.5}),cursor:_p}}>{t.name}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Trip hero */}
       <div style={{background:"linear-gradient(135deg,#0F1A2E,#162236)",borderRadius:20,padding:"20px",border:"1px solid #2A3A5A",marginBottom:16,position:"relative",overflow:"hidden"}}>
-        <div style={{position:"absolute",top:-20,right:-20,fontSize:80,opacity:0.15}}>{vacation.emoji}</div>
+        <div style={{position:"absolute",top:-20,right:-20,fontSize:80,opacity:0.1}}>✈️</div>
         <div style={ss(9,400,"#6A90B8",{letterSpacing:3,textTransform:"uppercase",marginBottom:6})}>Current Trip</div>
         <div style={sr(24,400,"#D0E0F4",{marginBottom:4})}>{vacation.name}</div>
         <div style={ss(10,400,"#7A90B8",{marginBottom:14})}>{vacation.destination}</div>
         <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
-          {[["📅",`${vacation.startDate} – ${vacation.endDate}`],["🌤️",vacation.climate],["📆",`${vacation.days} days`]].map(([icon,val])=>(
-            <div key={val} style={{..._row,gap:6}}>
-              <span style={{fontSize:12}}>{icon}</span>
-              <span style={ss(9,400,"#7A90B8",{letterSpacing:0.5})}>{val}</span>
-            </div>
+          {[["📅",`${vacation.startDate}${vacation.endDate?" – "+vacation.endDate:""}`],["🌤️",vacation.climate],["📆",`${vacation.days_plan.length} days`]].map(([icon,val])=>(
+            <div key={val} style={{..._row,gap:6}}><span style={{fontSize:12}}>{icon}</span><span style={ss(9,400,"#7A90B8",{letterSpacing:0.5})}>{val}</span></div>
           ))}
         </div>
-        {/* Activities */}
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:12}}>
-          {vacation.activities.map(a=>(
-            <div key={a} style={{background:"#1A2A4A",borderRadius:20,padding:"4px 10px",...ss(8.5,400,"#7090C0",{letterSpacing:0.5})}}>{a}</div>
-          ))}
-        </div>
-        {/* Weather forecast strip */}
-        {wxLoading&&(
-          <div style={{marginTop:14,display:"flex",alignItems:"center",gap:8}}>
-            <div style={{fontSize:14,animation:"spin 1.5s linear infinite",display:"inline-block"}}>✦</div>
-            <span style={ss(9,400,"#5A7090",{letterSpacing:1})}>Fetching weather…</span>
-          </div>
-        )}
+        {wxLoading&&<div style={{marginTop:14,..._row,gap:8}}><div style={{fontSize:14,animation:"spin 1.5s linear infinite",display:"inline-block"}}>✦</div><span style={ss(9,400,"#5A7090",{letterSpacing:1})}>Fetching weather…</span></div>}
         {weather&&!wxLoading&&(
           <div style={{marginTop:14}}>
-            <div style={ss(8,400,"#5A7090",{letterSpacing:2,textTransform:"uppercase",marginBottom:8})}>
-              Forecast · {weather.city}{weather.country?`, ${weather.country}`:""}
-            </div>
+            <div style={ss(8,400,"#5A7090",{letterSpacing:2,textTransform:"uppercase",marginBottom:8})}>Forecast · {weather.city}</div>
             <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:4}}>
-              {weather.daily.map((d,i)=>(
+              {weather.daily.map(d=>(
                 <div key={d.date} style={{flexShrink:0,textAlign:"center",background:"#0D1928",borderRadius:12,padding:"8px 10px",border:"1px solid #1A2A40",minWidth:48}}>
                   <div style={{fontSize:18,marginBottom:4}}>{condEmoji(d.condition)}</div>
                   <div style={ss(8,600,"#A0C0E0")}>{d.tempMax}°</div>
                   <div style={ss(7,400,"#4A6080")}>{d.tempMin}°</div>
-                  <div style={ss(7,400,"#3A5070",{marginTop:3,letterSpacing:0.3})}>
+                  <div style={ss(7,400,"#3A5070",{marginTop:3})}>
                     {["Su","Mo","Tu","We","Th","Fr","Sa"][new Date(d.date).getDay()]}
                   </div>
                 </div>
@@ -4097,182 +5971,6 @@ function VacationPlanner({items,outfits,showToast,onBack}){
         )}
       </div>
 
-      {/* View toggle */}
-      <div style={{display:"flex",gap:8,marginBottom:18}}>
-        {[["itinerary","Day-by-Day","📋"],["packing","What to Pack","🧳"]].map(([k,l,ic])=>(
-          <button key={k} className="pb" onClick={()=>setView(k)} style={{flex:1,padding:"10px",borderRadius:14,background:view===k?G:"#1A1A1A",border:view===k?"none":"1px solid #222",display:"flex",alignItems:"center",justifyContent:"center",gap:6,...ss(10,view===k?600:400,view===k?BK:DM,{letterSpacing:1})}}>
-            <span style={{fontSize:14}}>{ic}</span>{l}
-          </button>
-        ))}
-      </div>
-
-      {/* ITINERARY VIEW */}
-      {view==="itinerary"&&(
-        <>
-          <div style={{background:CD,borderRadius:18,padding:"14px 16px",border:`1px solid ${BR}`,marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div>
-              <Lbl mb={2}>Outfits Planned</Lbl>
-              <div style={sr(13,400,G,{fontStyle:"italic"})}>{vacation.days_plan.filter(d=>d.outfitIds.length>0).length} of {vacation.days} days have outfits</div>
-            </div>
-            <div style={{textAlign:"right"}}>
-              <div style={sr(24,300,G)}>{Math.round((vacation.days_plan.filter(d=>d.outfitIds.length>0).length/vacation.days)*100)}%</div>
-              <div style={ss(9,400,DM,{letterSpacing:1})}>PLANNED</div>
-            </div>
-          </div>
-
-          {vacation.days_plan.map((day)=>{
-            const isOpen=activeDay===day.day;
-            const dayItems=day.outfitIds.map(id=>items.find(i=>i.id===id)).filter(Boolean);
-            return(
-              <div key={day.day} className="ch" onClick={()=>setActiveDay(isOpen?null:day.day)}
-                style={{background:CD,borderRadius:18,padding:"14px 16px",marginBottom:10,border:`1.5px solid ${isOpen?"#C4A88266":BR}`}}>
-                <div style={{..._row,gap:12}}>
-                  {/* Day number */}
-                  <div style={{width:40,height:40,borderRadius:12,background:isOpen?`linear-gradient(135deg,${G},#8A6E54)`:"#1A1A1A",border:`1px solid ${isOpen?"transparent":"#2A2A2A"}`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                    <div style={ss(7,600,isOpen?BK:DM,{letterSpacing:1})}>DAY</div>
-                    <div style={sr(15,500,isOpen?BK:G)}>{day.day}</div>
-                  </div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{..._row,gap:6,marginBottom:2}}>
-                      <span style={{fontSize:14}}>{day.emoji}</span>
-                      <div style={sr(14,500,undefined,{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"})}>{day.label}</div>
-                    </div>
-                    <div style={{..._row,gap:8}}>
-                      <span style={ss(9,400,DM,{letterSpacing:1})}>{day.date} · {day.activity}</span>
-                      {(()=>{const wx=wxForDate(day.date); return wx?(
-                        <span style={{display:"inline-flex",alignItems:"center",gap:3,background:"#0D1928",borderRadius:8,padding:"2px 7px",border:"1px solid #1A2A40"}}>
-                          <span style={{fontSize:11}}>{condEmoji(wx.condition)}</span>
-                          <span style={ss(9,500,"#7AAAD0")}>{wx.tempMax}°</span>
-                        </span>
-                      ):null;})()}
-                    </div>
-                  </div>
-                  {/* Outfit preview thumbnails */}
-                  <div style={{display:"flex",gap:4,flexShrink:0}}>
-                    {dayItems.slice(0,3).map(it=>(
-                      <div key={it.id} style={{width:28,height:28,borderRadius:8,background:`linear-gradient(135deg,${it.color}22,${it.color}55)`,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}><ItemIllustration item={it} size={24}/></div>
-                    ))}
-                    {dayItems.length>3&&<div style={{width:28,height:28,borderRadius:8,background:_1a,display:"flex",alignItems:"center",justifyContent:"center",...ss(9,600,DM)}}>+{dayItems.length-3}</div>}
-                  </div>
-                </div>
-
-                {isOpen&&(
-                  <div style={{marginTop:14,borderTop:`1px solid ${BR}`,paddingTop:14}}>
-                    <div style={ss(9,400,DM,{letterSpacing:1.5,textTransform:"uppercase",marginBottom:10})}>Planned Outfit</div>
-                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-                      {dayItems.map(it=>(
-                        <div key={it.id} style={{..._col,alignItems:"center",gap:4}}>
-                          <ItemThumb item={it} size={52} r={14}/>
-                          <div style={ss(8,400,DM,{textAlign:"center",maxWidth:52,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"})}>{it.name.split(" ")[0]}</div>
-                        </div>
-                      ))}
-                      <div onClick={e=>{e.stopPropagation();showToast("Swap outfit for this day ❆");}} style={{width:52,height:52,borderRadius:14,background:"#0F0F0F",border:"1.5px dashed #2A2A2A",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:"#3A3028",cursor:_p}}>+</div>
-                    </div>
-
-                    {/* Weather & tips */}
-                    <div style={{background:"linear-gradient(135deg,#1A1A2E,#16213E)",borderRadius:14,padding:"12px 14px",marginBottom:12}}>
-                      {(()=>{const wx=wxForDate(day.date); return wx?(
-                        <div style={{..._row,gap:12,marginBottom:10,paddingBottom:10,borderBottom:"1px solid #1A2A40"}}>
-                          <div style={{fontSize:28}}>{condEmoji(wx.condition)}</div>
-                          <div>
-                            <div style={ss(8,600,"#7AAAD0",{letterSpacing:1.5,textTransform:"uppercase",marginBottom:2})}>{wx.condition}</div>
-                            <div style={{display:"flex",gap:10}}>
-                              <span style={ss(11,600,"#A0C8E8")}>↑ {wx.tempMax}°F</span>
-                              <span style={ss(11,400,"#4A6080")}>↓ {wx.tempMin}°F</span>
-                            </div>
-                          </div>
-                        </div>
-                      ):null;})()}
-                      <div style={ss(9,400,"#6A80A8",{letterSpacing:1.5,textTransform:"uppercase",marginBottom:6})}>AI Packing Tip</div>
-                      <div style={ss(10,400,"#7A90B8",{lineHeight:1.5})}>
-                        {day.activity==="Beach"&&"Bring a cover-up, sandals and your Gold Hoops for the beach bar after. Pack your sunscreen."}
-                        {day.activity==="Hiking"&&"Your White Sneakers work here. Bring a light layer — the Path of the Gods gets breezy."}
-                        {day.activity==="Fine Dining"&&"The Linen Midi Dress is perfect. Add your Slingback Heels and Gold Hoops to elevate it."}
-                        {day.activity==="Sightseeing"&&"Comfortable but polished — your Ivory Blouse and Trousers will handle cobblestones beautifully."}
-                        {day.activity==="Travel"&&"Keep your outfit practical and comfortable. Layers are key for airport temperature changes."}
-                        {day.activity==="Boat Trip"&&"Bring your Linen Dress as a cover-up over your swimsuit. A silk scarf doubles as a sarong."}
-                        {!["Beach","Hiking","Fine Dining","Sightseeing","Travel","Boat Trip"].includes(day.activity)&&"Consider the climate and activity level when finalising this look."}
-                      </div>
-                    </div>
-
-                    <div style={{display:"flex",gap:8}}>
-                      <Btn onClick={e=>{e.stopPropagation();showToast("Outfit confirmed for "+day.date+" ❆");}} full>CONFIRM LOOK</Btn>
-                      <Btn onClick={e=>{e.stopPropagation();showToast("Swapping outfit…");}} outline>SWAP</Btn>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </>
-      )}
-
-      {/* PACKING LIST VIEW */}
-      {view==="packing"&&(
-        <>
-          {/* Progress */}
-          <div style={{background:CD,borderRadius:18,padding:"16px 18px",border:`1px solid ${BR}`,marginBottom:16}}>
-            <div style={{..._btwn,marginBottom:10}}>
-              <div style={ss(9,400,DM,{letterSpacing:2,textTransform:"uppercase"})}>Packing Progress</div>
-              <div style={sr(16,500,G)}>{totalPacked}/{totalItems} packed</div>
-            </div>
-            <div style={{height:6,background:_1a,borderRadius:4,overflow:"hidden",marginBottom:6}}>
-              <div style={{height:"100%",width:pct+"%",background:`linear-gradient(90deg,${G},#8A6E54)`,borderRadius:4,transition:"width 0.4s ease"}} />
-            </div>
-            <div style={ss(9,400,pct===100?"#A8C4A0":DM,{letterSpacing:1})}>{pct===100?"All packed! Have a wonderful trip ✦":pct+"%  complete"}</div>
-          </div>
-
-          {/* Clothing from closet */}
-          <div style={{background:CD,borderRadius:18,padding:"16px 18px",border:`1px solid ${BR}`,marginBottom:12}}>
-            <div style={{..._btwn,marginBottom:14}}>
-              <Lbl>CLOTHING FROM YOUR CLOSET</Lbl>
-              <div style={ss(9,400,DM,{marginBottom:12})}>{packingItems.filter(it=>packed[it.id]).length}/{packingItems.length}</div>
-            </div>
-            {packingItems.map(it=>(
-              <div key={it.id} onClick={()=>togglePacked(it.id)}
-                style={{display:"flex",gap:12,alignItems:"center",marginBottom:10,cursor:_p,opacity:packed[it.id]?0.5:1,transition:"opacity 0.2s"}}>
-                <ItemThumb item={it} size={36} r={10}/>
-                <div style={{flex:1}}>
-                  <div style={sr(13,500,packed[it.id]?"#3A3028":undefined,{textDecoration:packed[it.id]?"line-through":"none"})}>{it.name}</div>
-                  <div style={ss(9,400,DM,{letterSpacing:1})}>{it.brand} · {it.category}</div>
-                </div>
-                <div style={{width:22,height:22,borderRadius:6,background:packed[it.id]?G:"#1A1A1A",border:`1.5px solid ${packed[it.id]?G:"#3A3028"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...ss(11,700,BK)}}>
-                  {packed[it.id]?"✓":""}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Essentials */}
-          <div style={{background:CD,borderRadius:18,padding:"16px 18px",border:`1px solid ${BR}`,marginBottom:12}}>
-            <div style={{..._btwn,marginBottom:14}}>
-              <Lbl>TRAVEL ESSENTIALS</Lbl>
-              <div style={ss(9,400,DM,{marginBottom:12})}>{essentials.filter(e=>packed[e.id]).length}/{essentials.length}</div>
-            </div>
-            {essentials.map(e=>(
-              <div key={e.id} onClick={()=>togglePacked(e.id)}
-                style={{display:"flex",gap:12,alignItems:"center",marginBottom:10,cursor:_p,opacity:packed[e.id]?0.5:1,transition:"opacity 0.2s"}}>
-                <div style={{width:36,height:36,borderRadius:10,background:_1a,border:_2a,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{e.emoji}</div>
-                <div style={{flex:1}}>
-                  <div style={sr(13,500,packed[e.id]?"#3A3028":undefined,{textDecoration:packed[e.id]?"line-through":"none"})}>{e.name}</div>
-                  <div style={ss(9,400,DM,{letterSpacing:1})}>{e.category}</div>
-                </div>
-                <div style={{width:22,height:22,borderRadius:6,background:packed[e.id]?G:"#1A1A1A",border:`1.5px solid ${packed[e.id]?G:"#3A3028"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...ss(11,700,BK)}}>
-                  {packed[e.id]?"✓":""}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Gaps warning */}
-          <div style={{background:"linear-gradient(135deg,#1A160F,#1E1A12)",borderRadius:16,padding:"14px 16px",border:"1px solid #2A2418",marginBottom:12}}>
-            <div style={ss(9,600,"#C4A882",{letterSpacing:1.5,textTransform:"uppercase",marginBottom:8})}>✦ AI Packing Check</div>
-            <div style={ss(10,400,DM,{lineHeight:1.6})}>You have <span style={{color:"#C4A882",fontWeight:600}}>no swimsuit</span> in your closet — you may want to purchase one before your trip. A <span style={{color:"#C4A882",fontWeight:600}}>silk scarf</span> would also work as a beach cover-up and add versatility to 4 of your planned outfits.</div>
-          </div>
-
-          <Btn onClick={()=>showToast("Packing list exported ❆")} full>EXPORT PACKING LIST</Btn>
-        </>
-      )}
     </div>
   );
 }
@@ -4531,7 +6229,7 @@ function WornHistoryCalendar({outfits,items,showToast,logWear}){
 }
 
 // ── CALENDAR ──────────────────────────────────────────────────────────────────
-function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
+function CalendarTab({outfits,items,showToast,logWear,events,setEvents,session}){
   const [sel,setSel]=useState(null);
   const [view,setView]=useState("events");
   const [showAddEvent,setShowAddEvent]=useState(false);
@@ -4539,18 +6237,73 @@ function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
   const [newDate,setNewDate]=useState("");
   const [newOccasion,setNewOccasion]=useState("Casual");
   const [newEmoji,setNewEmoji]=useState("📅");
+  const [planningEvent,setPlanningEvent]=useState(null); // event being planned
+  const [aiOutfits,setAiOutfits]=useState([]);
+  const [aiLoading,setAiLoading]=useState(false);
+  const [selectedOutfitIds,setSelectedOutfitIds]=useState([]);
+  const [outfitSearch,setOutfitSearch]=useState("");
+  const [savedOutfitId,setSavedOutfitId]=useState(null);
 
-  const occasionEmojis={"Work":"💼","Casual":"☀️","Evening":"🥂","Weekend":"🌿","Travel":"✈️","Sport":"🏃","Party":"🎉","Date":"💫"};
+  const occasionEmojis={"Work":"💼","Casual":"☀️","Date Night":"🕯️","Social Event":"🥂","Formal":"🎩","Active":"🏃","Travel":"✈️","Creative":"🎨"};
   const emojiOptions=["📅","💼","🥂","☀️","🌿","✈️","🎉","💫","🎂","🍽️","🎭","🛍️"];
 
   const addEvent=()=>{
-    if(!newLabel.trim()||!newDate.trim()){showToast("Please fill in event name and date \u2746");return;}
-    const newEv={id:Date.now(),date:newDate.trim(),label:newLabel.trim(),occasion:newOccasion,suggestedOutfit:outfits[0]?.id||null,emoji:newEmoji};
+    if(!newLabel.trim()||!newDate){showToast("Please fill in event name and date \u2746");return;}
+    const newEv={id:Date.now(),date:newDate,label:newLabel.trim(),occasion:newOccasion,suggestedOutfit:null,emoji:newEmoji};
     setEvents(prev=>[newEv,...prev]);
     setNewLabel(""); setNewDate(""); setNewOccasion("Casual"); setNewEmoji("📅");
     setShowAddEvent(false);
-    showToast(`"${newEv.label}" added \u2746`);
+    // Immediately open outfit planner for the new event
+    setPlanningEvent(newEv);
+    setAiOutfits([]); setSelectedOutfitIds([]); setOutfitSearch(""); setSavedOutfitId(null);
   };
+
+  const openPlanner=(ev)=>{
+    setPlanningEvent(ev);
+    setAiOutfits([]); setSelectedOutfitIds([]); setOutfitSearch(""); setSavedOutfitId(null);
+  };
+
+  const generateAIOutfit=async()=>{
+    if(!planningEvent) return;
+    setAiLoading(true); setAiOutfits([]);
+    try{
+      const closetSummary=items.slice(0,30).map(i=>`${i.name} (${i.category}, ${i.brand||""}, ${i.color})`).join("; ");
+      const raw=await callClaude(
+        `I have a ${planningEvent.occasion} event called "${planningEvent.label}" on ${planningEvent.date}. My closet includes: ${closetSummary}. Suggest 3 complete outfit combinations from these items. Each outfit should be cohesive and appropriate for the occasion. Return ONLY JSON: {"outfits":[{"name":"...","vibe":"...","itemNames":["exact item name 1","exact item name 2","exact item name 3"],"note":"one line why this works"}]}`
+      );
+      const json=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      // Map AI item names back to actual item objects
+      const matched=(json.outfits||[]).map((o,i)=>({
+        id:`ai-${i}`,
+        name:o.name,
+        vibe:o.vibe,
+        note:o.note,
+        items:o.itemNames.map(name=>items.find(it=>it.name.toLowerCase().includes(name.toLowerCase().split(" ")[0])||name.toLowerCase().includes(it.name.toLowerCase().split(" ")[0]))).filter(Boolean).map(it=>it.id),
+      })).filter(o=>o.items.length>0);
+      setAiOutfits(matched);
+    }catch(e){showToast("Couldn't generate suggestions — try again \u2746");}
+    setAiLoading(false);
+  };
+
+  const saveOutfitToEvent=(outfitObj)=>{
+    // Save as a real outfit if it's AI-generated
+    let outfitId = outfitObj.id;
+    if(String(outfitId).startsWith("ai-")){
+      const newOutfit={id:Date.now(),name:outfitObj.name,items:outfitObj.items,occasion:planningEvent.occasion,season:"All Year",wornHistory:[]};
+      setEvents(prev=>prev); // trigger re-render
+      outfitId=newOutfit.id;
+      // Patch into outfits via event update — parent doesn't have setOutfits here
+      // Store on event directly
+    }
+    setEvents(prev=>prev.map(ev=>ev.id===planningEvent.id?{...ev,suggestedOutfit:outfitId,outfitItems:outfitObj.items,outfitName:outfitObj.name}:ev));
+    setSavedOutfitId(outfitId);
+    showToast(`"${outfitObj.name}" saved for ${planningEvent.label} \u2746`);
+  };
+
+  // Outfits to show in search — existing saved outfits
+  const filteredOutfits=outfitSearch.trim()
+    ? outfits.filter(o=>o.name.toLowerCase().includes(outfitSearch.toLowerCase())||o.occasion?.toLowerCase().includes(outfitSearch.toLowerCase()))
+    : outfits.slice(0,6);
 
   return(
     <div className="fu" style={{padding:"16px 24px"}}>
@@ -4571,7 +6324,6 @@ function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
       {/* EVENTS VIEW */}
       {view==="events"&&(
         <>
-          {/* ADD UPCOMING EVENT — top */}
           <button className="sb" onClick={()=>setShowAddEvent(true)} style={{width:"100%",padding:"14px",borderRadius:14,background:CD,border:`1.5px dashed ${G}44`,display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginBottom:16,...ss(10,600,G,{letterSpacing:1.5}),cursor:_p}}>
             <span style={{fontSize:16}}>+</span> ADD UPCOMING EVENT
           </button>
@@ -4582,34 +6334,52 @@ function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
           </div>
 
           {events.map(ev=>{
-            const outfit=outfits.find(o=>o.id===ev.suggestedOutfit);
+            const outfitItems=(ev.outfitItems||[]).map(id=>items.find(i=>i.id===id)).filter(Boolean);
+            const hasOutfit=outfitItems.length>0 || ev.outfitName;
             const open=sel?.id===ev.id;
+            // Parse date string (e.g. "Fri Mar 21" or "Mar 21" or "Sat Apr 5")
+            const dateParts=(ev.date||"").replace(/^[A-Za-z]{3}\s/,"").split(" ");
+            const mon=(dateParts[0]||"").substring(0,3).toUpperCase();
+            const day=dateParts[1]||"";
             return(
               <div key={ev.id} className="ch" onClick={()=>setSel(open?null:ev)} style={{background:CD,borderRadius:18,padding:"16px 18px",marginBottom:12,border:`1px solid ${open?"#C4A88266":BR}`}}>
                 <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:open?12:0}}>
-                  <div style={{fontSize:26,width:40,textAlign:"center"}}>{ev.emoji}</div>
+                  {/* Calendar date badge */}
+                  <div style={{width:44,flexShrink:0,borderRadius:10,overflow:"hidden",border:`1px solid ${G}55`,boxShadow:`0 0 8px ${G}22`}}>
+                    <div style={{background:G,padding:"3px 0",textAlign:"center"}}>
+                      <div style={{fontFamily:"Montserrat,sans-serif",fontSize:9,fontWeight:700,color:BK,letterSpacing:1}}>{mon||"EVT"}</div>
+                    </div>
+                    <div style={{background:"#0D0D0D",padding:"4px 0",textAlign:"center"}}>
+                      <div style={{fontFamily:"Montserrat,sans-serif",fontSize:18,fontWeight:700,color:G,lineHeight:1}}>{day||"—"}</div>
+                    </div>
+                  </div>
                   <div style={{flex:1}}>
                     <div style={sr(15,500)}>{ev.label}</div>
                     <div style={ss(9,400,DM,{letterSpacing:1,marginTop:2})}>{ev.date} · {ev.occasion}</div>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    {outfit && <div style={ss(9,400,G)}>✓ Planned</div>}
+                    {hasOutfit&&<div style={ss(9,400,G)}>✓ Planned</div>}
                     <button onClick={e=>{e.stopPropagation();setEvents(prev=>prev.filter(x=>x.id!==ev.id));showToast("Event removed \u2746");}} style={{background:"none",border:"none",cursor:_p,...ss(12,400,DM)}}>×</button>
                   </div>
                 </div>
-                {open && outfit && (
+                {open&&(
                   <div style={{borderTop:`1px solid ${BR}`,paddingTop:12}}>
-                    <div style={ss(9,400,DM,{letterSpacing:1,marginBottom:8})}>SUGGESTED: {outfit.name.toUpperCase()}</div>
-                    <div style={{display:"flex",gap:8,marginBottom:12}}>
-                      {outfit.items.map(id=>{
-                        const it=items.find(i=>i.id===id);
-                        return it?(<ItemThumb key={id} item={it} size={46} r={10}/>):null;
-                      })}
-                    </div>
-                    <div style={{display:"flex",gap:8}}>
-                      <Btn onClick={()=>{logWear(ev.suggestedOutfit);showToast("Outfit locked in \u2746");}} full>CONFIRM OUTFIT</Btn>
-                      <Btn onClick={()=>showToast("Choosing different look\u2026")} outline>CHANGE</Btn>
-                    </div>
+                    {hasOutfit?(
+                      <>
+                        <div style={ss(9,400,DM,{letterSpacing:1,marginBottom:8})}>OUTFIT: {(ev.outfitName||"").toUpperCase()}</div>
+                        <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                          {outfitItems.map(it=><ItemThumb key={it.id} item={it} size={46} r={10}/>)}
+                        </div>
+                        <div style={{display:"flex",gap:8}}>
+                          <Btn onClick={e=>{e.stopPropagation();openPlanner(ev);}} outline small>CHANGE</Btn>
+                          <Btn onClick={e=>{e.stopPropagation();showToast("Outfit confirmed for "+ev.label+" \u2746");}} full small>CONFIRM ✓</Btn>
+                        </div>
+                      </>
+                    ):(
+                      <button onClick={e=>{e.stopPropagation();openPlanner(ev);}} style={{width:"100%",padding:"12px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(10,600,BK,{letterSpacing:1.5}),cursor:_p}}>
+                        ✦ PLAN OUTFIT FOR THIS EVENT
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -4620,7 +6390,7 @@ function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
 
       {/* VACATION VIEW */}
       {view==="vacation"&&(
-        <VacationPlanner items={items} outfits={outfits} showToast={showToast} onBack={()=>setView("events")} />
+        <VacationPlanner items={items} outfits={outfits} showToast={showToast} onBack={()=>setView("events")} session={session}/>
       )}
 
       {/* ── ADD EVENT MODAL ── */}
@@ -4630,28 +6400,18 @@ function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
             <div style={{width:36,height:4,borderRadius:2,background:"#333",margin:"0 auto 18px"}}/>
             <div style={sr(20,400,undefined,{marginBottom:4})}>Add Event</div>
             <div style={ss(9,400,DM,{letterSpacing:1,marginBottom:20})}>PLAN YOUR UPCOMING OCCASION</div>
-
-            {/* Emoji picker */}
             <div style={ss(8,600,DM,{letterSpacing:1.5,marginBottom:8})}>EMOJI</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
               {emojiOptions.map(em=>(
-                <button key={em} onClick={()=>setNewEmoji(em)} style={{width:40,height:40,borderRadius:10,background:newEmoji===em?`${G}22`:_1a,border:newEmoji===em?`1.5px solid ${G}`:_2a,fontSize:20,cursor:_p,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  {em}
-                </button>
+                <button key={em} onClick={()=>setNewEmoji(em)} style={{width:40,height:40,borderRadius:10,background:newEmoji===em?`${G}22`:_1a,border:newEmoji===em?`1.5px solid ${G}`:_2a,fontSize:20,cursor:_p,display:"flex",alignItems:"center",justifyContent:"center"}}>{em}</button>
               ))}
             </div>
-
-            {/* Event name */}
             <div style={ss(8,600,DM,{letterSpacing:1.5,marginBottom:8})}>EVENT NAME</div>
             <input value={newLabel} onChange={e=>setNewLabel(e.target.value)} placeholder="e.g. Birthday Dinner, Work Presentation…"
               style={{width:"100%",boxSizing:"border-box",background:_1a,border:_2a,borderRadius:12,padding:"11px 14px",...ss(12,400,MD),color:"inherit",marginBottom:14,outline:"none"}}/>
-
-            {/* Date */}
-            <div style={ss(8,600,DM,{letterSpacing:1.5,marginBottom:8})}>DATE</div>
-            <input value={newDate} onChange={e=>setNewDate(e.target.value)} placeholder="e.g. Fri Mar 21"
-              style={{width:"100%",boxSizing:"border-box",background:_1a,border:_2a,borderRadius:12,padding:"11px 14px",...ss(12,400,MD),color:"inherit",marginBottom:14,outline:"none"}}/>
-
-            {/* Occasion */}
+            <div style={{marginBottom:14}}>
+              <FullDatePicker label="DATE" value={newDate} onChange={setNewDate}/>
+            </div>
             <div style={ss(8,600,DM,{letterSpacing:1.5,marginBottom:8})}>OCCASION</div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:20}}>
               {Object.keys(occasionEmojis).map(occ=>(
@@ -4661,10 +6421,107 @@ function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
                 </button>
               ))}
             </div>
-
             <div style={{display:"flex",gap:10}}>
               <Btn onClick={()=>setShowAddEvent(false)} outline>CANCEL</Btn>
-              <Btn onClick={addEvent} full>ADD EVENT</Btn>
+              <Btn onClick={addEvent} full>SAVE & PLAN OUTFIT →</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── OUTFIT PLANNER MODAL ── */}
+      {planningEvent&&(
+        <div onClick={()=>setPlanningEvent(null)} style={{..._fix,background:"#000000CC",zIndex:90,display:"flex",alignItems:"flex-end"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#0D0D0D",borderRadius:"24px 24px 0 0",width:"100%",maxWidth:430,margin:"0 auto",border:_2a,maxHeight:"90vh",display:"flex",flexDirection:"column"}}>
+
+            {/* Header */}
+            <div style={{padding:"20px 22px 0",flexShrink:0}}>
+              <div style={{width:36,height:4,borderRadius:2,background:"#333",margin:"0 auto 16px"}}/>
+              <div style={{..._btwn,marginBottom:4}}>
+                <div>
+                  <div style={sr(20,400)}>Plan Outfit</div>
+                  <div style={ss(9,400,DM,{letterSpacing:1,marginTop:2})}>{planningEvent.emoji} {planningEvent.label.toUpperCase()} · {planningEvent.date}</div>
+                </div>
+                <button onClick={()=>setPlanningEvent(null)} style={{width:32,height:32,borderRadius:"50%",background:_1a,border:_2a,...ss(14,400,MD),cursor:_p,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+              </div>
+            </div>
+
+            <div className="sc" style={{flex:1,overflowY:"auto",padding:"16px 22px 32px"}}>
+
+              {/* Success state */}
+              {savedOutfitId&&(
+                <div style={{background:"#0F1A0F",borderRadius:14,padding:"14px 16px",border:"1px solid #2A4A2A",marginBottom:16,display:"flex",gap:10,alignItems:"center"}}>
+                  <span style={{fontSize:18}}>✓</span>
+                  <span style={ss(11,500,"#A8C4A0",{letterSpacing:0.5})}>Outfit saved for this event</span>
+                  <button onClick={()=>setPlanningEvent(null)} style={{marginLeft:"auto",padding:"5px 14px",borderRadius:20,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,BK),cursor:_p}}>DONE</button>
+                </div>
+              )}
+
+              {/* AI Generate */}
+              <button onClick={generateAIOutfit} disabled={aiLoading} style={{width:"100%",padding:"12px 16px",borderRadius:14,background:aiLoading?_1a:`linear-gradient(135deg,${G},#A08060,#C4A882)`,border:"none",display:"flex",alignItems:"center",justifyContent:"center",gap:8,cursor:aiLoading?"default":_p,marginBottom:16,opacity:aiLoading?0.7:1}}>
+                <span style={{fontSize:15,animation:aiLoading?"spin 1s linear infinite":undefined}}>✦</span>
+                <div style={ss(10,700,aiLoading?MD:BK,{letterSpacing:1.5})}>{aiLoading?"GENERATING LOOKS…":"AI SUGGEST OUTFITS FOR THIS EVENT"}</div>
+              </button>
+
+              {/* AI suggestions */}
+              {aiOutfits.length>0&&(
+                <div style={{marginBottom:20}}>
+                  <div style={ss(9,600,DM,{letterSpacing:1.5,marginBottom:10})}>AI SUGGESTIONS</div>
+                  {aiOutfits.map(o=>{
+                    const oItems=o.items.map(id=>items.find(i=>i.id===id)).filter(Boolean);
+                    return(
+                      <div key={o.id} style={{background:CD,borderRadius:16,padding:"14px",border:`1px solid ${BR}`,marginBottom:10}}>
+                        <div style={{..._btwn,marginBottom:8}}>
+                          <div>
+                            <div style={sr(14,500)}>{o.name}</div>
+                            <div style={ss(9,400,G,{marginTop:2,fontStyle:"italic"})}>{o.vibe}</div>
+                          </div>
+                        </div>
+                        <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                          {oItems.map(it=><ItemThumb key={it.id} item={it} size={48} r={11}/>)}
+                        </div>
+                        {o.note&&<div style={ss(9,400,DM,{marginBottom:10,lineHeight:1.5,fontStyle:"italic"})}>✦ {o.note}</div>}
+                        <button onClick={()=>saveOutfitToEvent(o)} style={{width:"100%",padding:"10px",borderRadius:12,background:savedOutfitId?`linear-gradient(135deg,#2A4A2A,#1A3A1A)`:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,savedOutfitId?"#80C080":BK,{letterSpacing:1}),cursor:_p}}>
+                          {savedOutfitId?"✓ SAVED":"SAVE THIS LOOK FOR EVENT"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Divider */}
+              <div style={{..._row,gap:10,marginBottom:16}}>
+                <div style={{flex:1,height:1,background:BR}}/>
+                <div style={ss(8,400,DM,{letterSpacing:1})}>OR CHOOSE FROM YOUR CLOSET</div>
+                <div style={{flex:1,height:1,background:BR}}/>
+              </div>
+
+              {/* Search existing outfits */}
+              <div style={{..._row,gap:8,background:"#0D0D0D",border:`1px solid #2A2A2A`,borderRadius:10,padding:"8px 12px",marginBottom:12}}>
+                <span style={{fontSize:12,opacity:0.4}}>🔍</span>
+                <input value={outfitSearch} onChange={e=>setOutfitSearch(e.target.value)} placeholder="Search your saved outfits…"
+                  style={{flex:1,background:"none",border:"none",outline:"none",...ss(11,400,MD),color:"#C0B8B0"}}/>
+                {outfitSearch&&<button onClick={()=>setOutfitSearch("")} style={{background:"none",border:"none",cursor:_p,...ss(12,400,DM)}}>✕</button>}
+              </div>
+
+              {filteredOutfits.length===0&&<div style={sr(12,300,"#3A3028",{fontStyle:"italic",textAlign:"center",padding:"16px 0"})}>No saved outfits yet — use AI above to generate one</div>}
+              {filteredOutfits.map(o=>{
+                const oItems=(o.items||[]).map(id=>items.find(i=>i.id===id)).filter(Boolean);
+                return(
+                  <div key={o.id} style={{background:CD,borderRadius:14,padding:"12px 14px",border:`1px solid ${BR}`,marginBottom:8,display:"flex",gap:12,alignItems:"center"}}>
+                    <div style={{display:"flex",gap:6,flex:1,flexWrap:"wrap"}}>
+                      {oItems.slice(0,4).map(it=><ItemThumb key={it.id} item={it} size={40} r={9}/>)}
+                      <div style={{flex:1,minWidth:80}}>
+                        <div style={sr(13,500,undefined,{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"})}>{o.name}</div>
+                        <div style={ss(9,400,DM,{marginTop:2})}>{o.occasion}</div>
+                      </div>
+                    </div>
+                    <button onClick={()=>saveOutfitToEvent({...o,items:o.items||[]})} style={{padding:"7px 14px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,BK,{letterSpacing:0.8}),cursor:_p,flexShrink:0}}>SELECT</button>
+                  </div>
+                );
+              })}
+
             </div>
           </div>
         </div>
@@ -4676,12 +6533,11 @@ function CalendarTab({outfits,items,showToast,logWear,events,setEvents}){
 // ── CREATE LISTING PAGE ───────────────────────────────────────────────────────
 function CreateListingPage({item, onClose, showToast}){
   const suggested=Math.round(item.price * (item.condition==="Like New"?0.75:item.condition==="Excellent"?0.65:item.condition==="Good"?0.55:0.4));
-  const [price,setPrice]=useState(suggested+"");
   const [condition,setCondition]=useState(item.condition||"Good");
-  const [desc,setDesc]=useState(`${item.condition} condition ${item.name} from ${item.brand}. Worn ${item.wearCount} time${item.wearCount!==1?"s":""}.`);
   const [shippingBy,setShippingBy]=useState("seller");
   const [submitted,setSubmitted]=useState(false);
-
+  const [price,setPrice]=useState(suggested+"");
+  const [desc,setDesc]=useState(`${item.condition} condition ${item.name} from ${item.brand}. Worn ${item.wearCount} time${item.wearCount!==1?"s":""}.`);
   const conditions=["Like New","Excellent","Good","Fair"];
   const condColor={"Like New":"#60A870","Excellent":"#A8C060","Good":"#C4A060","Fair":"#C08060"};
   const outfixFee=Math.round(parseInt(price||0)*0.1);
@@ -4916,10 +6772,10 @@ function StatsTab({items, outfits, showToast, logWear}){
             <Lbl>MOST WORN</Lbl>
             {top.map((item,i)=>(
               <div key={item.id} style={{..._row,gap:12,marginBottom:i<2?12:0,paddingBottom:i<2?12:0,borderBottom:i<2?`1px solid ${BR}`:"none"}}>
-                <div style={{width:42,height:42,borderRadius:12,background:`linear-gradient(135deg,${item.color}22,${item.color}55)`,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}><ItemIllustration item={item} size={36}/></div>
+                <ItemThumb item={item} size={48} r={12}/>
                 <div style={{flex:1}}>
                   <div style={sr(14,500)}>{item.name}</div>
-                  <div style={ss(9,400,DM,{letterSpacing:1})}>{item.wearCount} wears</div>
+                  <div style={ss(9,400,DM,{letterSpacing:1})}>{item.wearCount} wears · {item.brand}</div>
                 </div>
                 <div style={{background:"#1E1E1E",borderRadius:20,padding:"4px 10px",...ss(9,600,"#A8C4A0",{letterSpacing:1})}}>#{i+1}</div>
               </div>
@@ -4930,7 +6786,7 @@ function StatsTab({items, outfits, showToast, logWear}){
             <Lbl>RARELY WORN — CONSIDER SELLING</Lbl>
             {neglected.map(item=>(
               <div key={item.id} style={{..._row,gap:12,marginBottom:10}}>
-                <ItemIllustration item={item} size={34}/>
+                <ItemThumb item={item} size={44} r={10}/>
                 <div style={{flex:1}}>
                   <div style={sr(13,500)}>{item.name}</div>
                   <div style={ss(9,400,DM,{letterSpacing:1})}>{item.wearCount} wears · Last: {item.lastWorn}</div>
@@ -4957,16 +6813,9 @@ function StatsTab({items, outfits, showToast, logWear}){
 
 // ── NOTIFICATIONS ────────────────────────────────────────────────────────────
 const initNotifications = [
-  { id:1,  type:"sale",     read:false, time:"2m ago",    icon:"🏷️", title:"Your item sold!",             body:"Someone just bought your Mini Leather Skirt for $55. Payment is on its way." },
-  { id:2,  type:"message",  read:false, time:"14m ago",   icon:"💬", title:"Isabelle M. sent a message",  body:"I have pulled together some camel-tone pieces that would work beautifully with your current wardrobe..." },
-  { id:3,  type:"feed",     read:false, time:"1h ago",    icon:"🌸", title:"@jess.styles posted a look",  body:"New outfit: Golden Hour — two of the items match pieces already in your closet." },
-  { id:4,  type:"wishlist", read:false, time:"2h ago",    icon:"✦",  title:"Wishlist match found!",       body:"Chelsea Boots by Sezane just listed in the Market by @the.closet.co — size 38, $185." },
-  { id:5,  type:"ai",       read:true,  time:"3h ago",    icon:"✧",  title:"New pairing suggestion",      body:"Your Trench Coat pairs beautifully with the Linen Midi Dress this season. Tap to see the full look." },
-  { id:6,  type:"booking",  read:true,  time:"5h ago",    icon:"📅", title:"Session confirmed",           body:"Isabelle M. confirmed your Closet Audit for Thursday at 2:00 PM. Check your planner." },
-  { id:7,  type:"feed",     read:true,  time:"8h ago",    icon:"🖤", title:"@minimal.edit posted a look", body:"New outfit: All-Black Everything — 841 likes. Two items are available in the Market." },
-  { id:8,  type:"log",      read:true,  time:"Yesterday", icon:"👗", title:"Log what you wore today",     body:"You have not logged an outfit yet today. Keeping your wear history updated improves your Stats." },
-  { id:9,  type:"ai",       read:true,  time:"Yesterday", icon:"✧",  title:"Wardrobe insight",            body:"Your Gold Hoop Earrings have been worn 55 times — the most of any item. Cost per wear is now just $1." },
-  { id:10, type:"billing",  read:true,  time:"2 days ago",icon:"◆",  title:"Subscription renews soon",   body:"Your Outfix+ plan renews in 7 days on March 15 for $5.99. Manage your plan anytime." },
+  { id:1, type:"sale",     read:false, time:"2m ago",  icon:"🏷️", title:"Your item sold!",            body:"Someone just bought your Mini Leather Skirt for $55. Payment is on its way." },
+  { id:2, type:"wishlist", read:false, time:"2h ago",  icon:"✦",  title:"Wishlist match found!",      body:"Chelsea Boots by Sezane just listed in the Market by @the.closet.co — size 38, $185." },
+  { id:3, type:"ai",       read:true,  time:"1d ago",  icon:"✧",  title:"Wardrobe insight",           body:"Your most-worn item has a cost-per-wear under $2. Keep it up." },
 ];
 
 // ── CART & CHECKOUT ───────────────────────────────────────────────────────────
@@ -5717,25 +7566,47 @@ function BadgesSection({stats}){
   );
 }
 
-function SettingsTab({currentPlan,setShowPricing,showToast,items,userName="",userEmail="",onSignOut}){
+function SettingsTab({currentPlan,setShowPricing,showToast,items,userName="",userEmail="",onSignOut,userProfile={},saveProfile}){
   const [section,setSection]=useState("profile");
+  const [editField,setEditField]=useState(null); // which field is open
+  const [editVal,setEditVal]=useState("");
   const totalValue=items.reduce((s,i)=>s+i.price,0);
-  const totalResale=items.reduce((s,i)=>s+(resaleValues[i.id]||Math.round(i.price*0.45)),0);
+  const totalResale=items.reduce((s,i)=>s+Math.round(i.price*0.45),0);
   const stats=computeStats(items);
   const earnedBadges=ALL_BADGES.filter(b=>b.check(stats));
 
   const sections=[["profile","Profile"],["badges","Badges"],["preferences","Preferences"],["privacy","Privacy & Data"]];
+
+  const openEdit=(field,currentVal)=>{
+    setEditField(field);
+    setEditVal(currentVal||"");
+  };
+
+  const confirmEdit=async()=>{
+    if(!editField) return;
+    await saveProfile({[editField]: editVal.trim()});
+    showToast("Profile updated \u2746");
+    setEditField(null);
+  };
+
+  const profileFields=[
+    {key:"username", label:"Username", placeholder:"e.g. mike_style", hint:"How others will find and tag you"},
+    {key:"bio", label:"Bio", placeholder:"e.g. Building a forever closet, one piece at a time.", hint:"A short line about your style"},
+    {key:"location", label:"Location", placeholder:"e.g. New York, NY", hint:"City or region"},
+    {key:"styleIdentity", label:"Style Identity", placeholder:"e.g. Minimal · Classic · Investment pieces", hint:"Describe your aesthetic"},
+  ];
 
   return(
     <div className="fu" style={{padding:"16px 24px"}}>
       {/* Profile hero */}
       <div style={{background:"linear-gradient(135deg,#1A1A0A,#2A2010)",borderRadius:20,padding:"20px",marginBottom:20,border:`1px solid ${G}33`,textAlign:"center"}}>
         <div style={{width:72,height:72,borderRadius:"50%",background:`linear-gradient(135deg,${G},#8A6E54)`,margin:"0 auto 12px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>✦</div>
-        <div style={sr(22,400,G)}>{userName||"Your Wardrobe"}</div>
+        <div style={sr(22,400,G)}>{userProfile.username ? `@${userProfile.username}` : userName||"Your Wardrobe"}</div>
         <div style={ss(9,400,DM,{letterSpacing:1,marginTop:2})}>{userEmail}</div>
+        {userProfile.bio&&<div style={ss(10,400,"#8A7A60",{marginTop:4,fontStyle:"italic"})}>{userProfile.bio}</div>}
         <div style={ss(9,400,DM,{letterSpacing:1,marginTop:4})}>{currentPlan==="free"?"FREE PLAN":currentPlan==="plus"?"OUTFIX+ MEMBER":"OUTFIX PRO MEMBER"}</div>
         <div style={{display:"flex",gap:16,justifyContent:"center",marginTop:14}}>
-          {[[items.length,"Pieces"],[`$${totalValue.toLocaleString()}`,"Value"],[`$${totalResale.toLocaleString()}`,"Resale"],["842","Followers"]].map(([v,l])=>(
+          {[[items.length,"Pieces"],[`$${totalValue.toLocaleString()}`,"Value"],[`$${totalResale.toLocaleString()}`,"Resale"]].map(([v,l])=>(
             <div key={l} style={{textAlign:"center"}}>
               <div style={sr(18,400,G)}>{v}</div>
               <div style={ss(8,400,DM,{letterSpacing:1})}>{l.toUpperCase()}</div>
@@ -5772,16 +7643,40 @@ function SettingsTab({currentPlan,setShowPricing,showToast,items,userName="",use
         </div>
       )}
 
-      {/* PROFILE */}
+      {/* PROFILE — real editable fields */}
       {section==="profile"&&(
         <div>
-          {[["Display Name","@outfix_user"],["Location","New York, NY"],["Style Identity","Minimal · Classic"],["Bio","Building a forever closet, one piece at a time."]].map(([l,v])=>(
-            <div key={l} style={{marginBottom:14}}>
-              <div style={ss(8,600,DM,{letterSpacing:1.5,marginBottom:6})}>{l}</div>
-              <div style={{background:_1a,border:_2a,borderRadius:12,padding:"11px 14px",...ss(12,400,MD),display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <span>{v}</span>
-                <button onClick={()=>showToast("Edit mode \u2746")} style={{...ss(8,600,G,{letterSpacing:0.8}),background:"none",border:"none",cursor:_p}}>EDIT</button>
-              </div>
+          <div style={{background:"#0A1008",borderRadius:14,padding:"12px 14px",border:"1px solid #1A2A18",marginBottom:16,display:"flex",gap:10}}>
+            <span style={{fontSize:14}}>💡</span>
+            <div style={ss(10,400,"#6A8A68",{lineHeight:1.6})}>Set a username so other Outfix users can find and follow you. All fields are optional.</div>
+          </div>
+          {profileFields.map(({key,label,placeholder,hint})=>(
+            <div key={key} style={{marginBottom:14}}>
+              <div style={ss(8,600,DM,{letterSpacing:1.5,marginBottom:6})}>{label.toUpperCase()}</div>
+              {editField===key ? (
+                <div>
+                  <input
+                    autoFocus
+                    value={editVal}
+                    onChange={e=>setEditVal(e.target.value)}
+                    placeholder={placeholder}
+                    onKeyDown={e=>{if(e.key==="Enter") confirmEdit(); if(e.key==="Escape") setEditField(null);}}
+                    style={{width:"100%",boxSizing:"border-box",background:"#0D0D0D",border:`1.5px solid ${G}`,borderRadius:12,padding:"11px 14px",...ss(12,400,MD),color:"#E8E0D4",outline:"none",marginBottom:8}}
+                  />
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setEditField(null)} style={{flex:1,padding:"9px",borderRadius:12,background:"#1A1A1A",border:"1px solid #2A2A2A",...ss(9,600,DM,{letterSpacing:1}),cursor:_p}}>CANCEL</button>
+                    <button onClick={confirmEdit} style={{flex:2,padding:"9px",borderRadius:12,background:`linear-gradient(135deg,${G},#8A6E54)`,border:"none",...ss(9,600,BK,{letterSpacing:1}),cursor:_p}}>SAVE</button>
+                  </div>
+                </div>
+              ) : (
+                <div onClick={()=>openEdit(key, userProfile[key]||"")} style={{background:_1a,border:_2a,borderRadius:12,padding:"11px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:_p}}>
+                  <div>
+                    <div style={ss(12,400,userProfile[key]?MD:DM)}>{userProfile[key]||placeholder}</div>
+                    {hint&&<div style={ss(8,400,DM,{marginTop:2})}>{hint}</div>}
+                  </div>
+                  <div style={ss(10,600,G,{letterSpacing:0.8,flexShrink:0,marginLeft:12})}>EDIT</div>
+                </div>
+              )}
             </div>
           ))}
           {currentPlan==="free"&&(
@@ -5841,16 +7736,53 @@ function SettingsTab({currentPlan,setShowPricing,showToast,items,userName="",use
 // ── CAPSULE COLLECTIONS ────────────────────────────────────────────────────────
 
 // ── VAULT ────────────────────────────────────────────────────────────────────
-function VaultTab({items,outfits,showToast,wishlist,setWishlist,currentPlan,setShowPricing,logWear,events,setEvents}){
+function VaultTab({items,outfits,showToast,wishlist,setWishlist,addToWishlist,removeFromWishlist,currentPlan,setShowPricing,logWear,events,setEvents}){
   const [section,setSection]=useState("discover"); // discover | planner | stats
   const isPro = currentPlan!=="free";
 
   const sections=[
-    ["discover","Discover","✦","AI pairings, missing pieces & trend matching"],
-    ["planner","Planner","📅","Occasion calendar & vacation packing"],
-    ["stats","Stats","📊","Wardrobe analytics, duplicates & valuation"],
-    ["shoppers","Shoppers","💎","Book a personal stylist session"],
+    ["discover","Discover",null,"AI pairings, missing pieces & trend matching"],
+    ["planner","Planner",null,"Occasion calendar & vacation packing"],
+    ["stats","Stats",null,"Wardrobe analytics, duplicates & valuation"],
+    ["shoppers","Shoppers",null,"Book a personal stylist session"],
   ];
+
+  const VaultIcon = ({id, active}) => {
+    const c = active ? BK : MD;
+    const icons = {
+      discover: (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="6.5" stroke={c} strokeWidth="1.3" fill="none"/>
+          <path d="M8 4L9.2 7.2L12 8L9.2 8.8L8 12L6.8 8.8L4 8L6.8 7.2L8 4Z" fill={c}/>
+        </svg>
+      ),
+      planner: (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <rect x="1.5" y="3" width="13" height="11.5" rx="2" stroke={c} strokeWidth="1.3" fill="none"/>
+          <line x1="1.5" y1="6.5" x2="14.5" y2="6.5" stroke={c} strokeWidth="1.2"/>
+          <line x1="5" y1="1.5" x2="5" y2="4.5" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+          <line x1="11" y1="1.5" x2="11" y2="4.5" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+          <rect x="4.5" y="9" width="2.5" height="2.5" rx="0.5" fill={c} opacity="0.8"/>
+          <rect x="9" y="9" width="2.5" height="2.5" rx="0.5" fill={c} opacity="0.8"/>
+        </svg>
+      ),
+      stats: (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <line x1="2" y1="14" x2="14" y2="14" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+          <rect x="3" y="9" width="2.5" height="5" rx="0.5" fill={c}/>
+          <rect x="6.8" y="6" width="2.5" height="8" rx="0.5" fill={c} opacity="0.8"/>
+          <rect x="10.5" y="3" width="2.5" height="11" rx="0.5" fill={c} opacity="0.6"/>
+        </svg>
+      ),
+      shoppers: (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="5.5" r="3" stroke={c} strokeWidth="1.3" fill="none"/>
+          <path d="M2 14.5C2 11.5 4.7 9 8 9C11.3 9 14 11.5 14 14.5" stroke={c} strokeWidth="1.3" strokeLinecap="round" fill="none"/>
+        </svg>
+      ),
+    };
+    return icons[id]||null;
+  };
 
   // ── Locked gate card shown per-section when not subscribed ──
   const gateDesc={
@@ -5900,7 +7832,7 @@ function VaultTab({items,outfits,showToast,wishlist,setWishlist,currentPlan,setS
 
       {/* Sub-nav pills */}
       <div style={{display:"flex",gap:6,padding:"0 16px 20px"}}>
-        {sections.map(([k,l,ic])=>(
+        {sections.map(([k,l])=>(
           <button key={k} onClick={()=>setSection(k)} style={{
             flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3,
             padding:"7px 4px",borderRadius:14,
@@ -5908,7 +7840,7 @@ function VaultTab({items,outfits,showToast,wishlist,setWishlist,currentPlan,setS
             border:section===k?"none":"1px solid #2A2A2A",
             cursor:_p,
           }}>
-            <span style={{fontSize:14}}>{ic}</span>
+            <VaultIcon id={k} active={section===k}/>
             <span style={{...ss(7,section===k?700:400,section===k?BK:MD,{letterSpacing:0.5}),whiteSpace:"nowrap"}}>{l.toUpperCase()}</span>
           </button>
         ))}
@@ -5917,12 +7849,12 @@ function VaultTab({items,outfits,showToast,wishlist,setWishlist,currentPlan,setS
       {/* Content */}
       {section==="discover"&&(
         <Gate feature="AI Stylist">
-          <DiscoverTab showToast={showToast} wishlist={wishlist} setWishlist={setWishlist} items={items}/>
+          <DiscoverTab showToast={showToast} wishlist={wishlist} setWishlist={setWishlist} addToWishlist={addToWishlist} items={items}/>
         </Gate>
       )}
       {section==="planner"&&(
         <Gate feature="Occasion Planner">
-          <CalendarTab outfits={outfits} items={items} showToast={showToast} logWear={logWear} events={events} setEvents={setEvents}/>
+          <CalendarTab outfits={outfits} items={items} showToast={showToast} logWear={logWear} events={events} setEvents={setEvents} session={session}/>
         </Gate>
       )}
       {section==="stats"&&(
@@ -5935,6 +7867,247 @@ function VaultTab({items,outfits,showToast,wishlist,setWishlist,currentPlan,setS
           <PremiumTab showToast={showToast} currentPlan={currentPlan} setShowPricing={setShowPricing}/>
         </Gate>
       )}
+    </div>
+  );
+}
+
+// ── ONBOARDING ────────────────────────────────────────────────────────────────
+function ObSlide1(){
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"linear-gradient(160deg,#1A140E,#0D0D0D)",padding:"40px 32px",textAlign:"center"}}>
+      <div style={{width:120,height:120,borderRadius:32,background:"#C4A88218",border:"1px solid #C4A88244",display:"flex",alignItems:"center",justifyContent:"center",marginBottom:36,boxShadow:"0 0 60px #C4A88222"}}>
+        <span style={{fontSize:56,color:"#C4A882"}}>✦</span>
+      </div>
+      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:52,fontWeight:300,letterSpacing:6,color:"#F0EBE3",marginBottom:14}}>Outfix</div>
+      <div style={{fontFamily:"Montserrat,sans-serif",fontSize:11,fontWeight:600,letterSpacing:3,color:"#5A5048",marginBottom:32}}>YOUR WARDROBE. ELEVATED.</div>
+      <div style={{fontFamily:"Montserrat,sans-serif",fontSize:15,color:"#8A7868",lineHeight:1.8,maxWidth:280}}>A private, intelligent home for your wardrobe.</div>
+    </div>
+  );
+}
+
+function ObSlide2(){
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#0D0D0D",padding:"28px 24px"}}>
+      <div style={{fontFamily:"Montserrat,sans-serif",fontSize:11,letterSpacing:2,color:"#5A5048",marginBottom:6}}>YOUR CLOSET</div>
+      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:300,color:"#F0EBE3",marginBottom:20}}>Build Your Closet</div>
+      {[
+        {ic:"📷",label:"SCAN FROM PHOTO",sub:"AI identifies all items in image",gold:true},
+        {ic:"🔗",label:"PASTE URL",sub:"https://store.com/item…",gold:false},
+        {ic:"🎙️",label:"DESCRIBE IT",sub:'"navy wool blazer from Zara…"',gold:false},
+        {ic:"✏️",label:"ADD MANUALLY",sub:"Fill in all details yourself",gold:false},
+      ].map(({ic,label,sub,gold})=>(
+        <div key={label} style={{background:"#141414",borderRadius:14,padding:"14px 16px",border:`1px solid ${gold?"#C4A88244":"#2A2A2A"}`,display:"flex",alignItems:"center",gap:14,marginBottom:10}}>
+          <div style={{width:46,height:46,borderRadius:12,background:gold?"#C4A88222":"#1A1A1A",border:`1px solid ${gold?"#C4A88244":"#2A2A2A"}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{ic}</div>
+          <div>
+            <div style={{fontFamily:"Montserrat,sans-serif",fontSize:12,fontWeight:600,color:gold?"#C4A882":"#8A7060",letterSpacing:1}}>{label}</div>
+            <div style={{fontFamily:"Montserrat,sans-serif",fontSize:11,color:"#3A3028",marginTop:3}}>{sub}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ObSlide3(){
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#0D0D0D",padding:"28px 24px"}}>
+      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,fontWeight:300,color:"#F0EBE3",marginBottom:6}}>Mix & Match</div>
+      <div style={{fontFamily:"Montserrat,sans-serif",fontSize:10,letterSpacing:1.5,color:"#5A5048",marginBottom:18}}>SWIPE · HOLD TO REMOVE · TAP TWICE TO LOCK</div>
+      {/* Tops — locked */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontFamily:"Montserrat,sans-serif",fontSize:10,letterSpacing:1,color:"#C4A882",marginBottom:6}}>TOPS 🔒</div>
+        <div style={{height:110,borderRadius:16,background:"linear-gradient(135deg,#F5F0E822,#EDE8DF44)",border:"1.5px solid #C4A882",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
+          <svg viewBox="0 0 120 110" width="90" height="82" fill="none">
+            <defs><linearGradient id="ob1" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0%" stopColor="#FDFAF5"/><stop offset="100%" stopColor="#EDE8DF"/></linearGradient></defs>
+            <path d="M36 26 C28 32,22 52,22 88 L98 88 C98 52,92 32,84 26 C76 20,66 18,60 18 C54 18,44 20,36 26Z" fill="url(#ob1)" stroke="#D8D2C8" strokeWidth="0.8"/>
+            <path d="M36 26 C26 24,14 28,10 38 C8 48,10 66,14 74 L28 70 C26 62,25 48,28 40 C30 34,34 28,36 26Z" fill="url(#ob1)" stroke="#D8D2C8" strokeWidth="0.8"/>
+            <path d="M84 26 C94 24,106 28,110 38 C112 48,110 66,106 74 L92 70 C94 62,95 48,92 40 C90 34,86 28,84 26Z" fill="url(#ob1)" stroke="#D8D2C8" strokeWidth="0.8"/>
+            <path d="M46 26 L60 50 L74 26" fill="none" stroke="#C8C0B4" strokeWidth="1"/>
+            <line x1="60" y1="50" x2="60" y2="88" stroke="#D0C8BC" strokeWidth="0.8" strokeDasharray="2,3"/>
+          </svg>
+          <div style={{position:"absolute",bottom:8,right:12,fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#C4A882"}}>Ivory Blouse</div>
+        </div>
+      </div>
+      {/* Bottoms */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontFamily:"Montserrat,sans-serif",fontSize:10,letterSpacing:1,color:"#5A5048",marginBottom:6}}>BOTTOMS</div>
+        <div style={{height:110,borderRadius:16,background:"linear-gradient(135deg,#2C3E5022,#1E304044)",border:"1.5px solid #2A2A2A",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
+          <svg viewBox="0 0 120 120" width="86" height="82" fill="none">
+            <defs><linearGradient id="ob2" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0%" stopColor="#3A4F64"/><stop offset="100%" stopColor="#1E3040"/></linearGradient></defs>
+            <rect x="26" y="14" width="68" height="10" rx="2" fill="#2A3E52" stroke="#1A2E40" strokeWidth="0.5"/>
+            <path d="M26 24 C22 56,16 90,12 118 L54 118 C56 90,58 56,60 24Z" fill="url(#ob2)"/>
+            <path d="M94 24 C98 56,104 90,108 118 L66 118 C64 90,62 56,60 24Z" fill="url(#ob2)"/>
+            <line x1="60" y1="24" x2="44" y2="118" stroke="#162838" strokeWidth="0.8" opacity="0.6"/>
+            <line x1="60" y1="24" x2="76" y2="118" stroke="#162838" strokeWidth="0.8" opacity="0.6"/>
+          </svg>
+          <div style={{position:"absolute",bottom:8,right:12,fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#5A5048"}}>Wide Leg</div>
+        </div>
+      </div>
+      {/* Shoes */}
+      <div>
+        <div style={{fontFamily:"Montserrat,sans-serif",fontSize:10,letterSpacing:1,color:"#5A5048",marginBottom:6}}>SHOES</div>
+        <div style={{height:110,borderRadius:16,background:"linear-gradient(135deg,#1A100822,#2A180A44)",border:"1.5px solid #2A2A2A",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
+          <svg viewBox="0 0 140 80" width="130" height="74" fill="none">
+            <defs><linearGradient id="ob3" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#4A3020"/><stop offset="100%" stopColor="#2A1A0A"/></linearGradient></defs>
+            <path d="M10 55 C10 40,20 28,40 26 C60 24,80 26,100 30 C115 33,128 40,130 50 C132 58,125 65,110 66 L30 66 C18 66,10 62,10 55Z" fill="url(#ob3)" stroke="#3A2010" strokeWidth="1"/>
+            <path d="M40 26 C42 18,50 14,62 14 C72 14,78 18,80 26" fill="none" stroke="#3A2010" strokeWidth="1.5" strokeLinecap="round"/>
+            <ellipse cx="62" cy="24" rx="8" ry="4" fill="#5A3A20" stroke="#3A2010" strokeWidth="0.8"/>
+          </svg>
+          <div style={{position:"absolute",bottom:8,right:12,fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#5A5048"}}>Loafers</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ObSlide4(){
+  const posts=[
+    {user:"@minimal.edit",followers:"8.1k",outfit:"Quiet Luxury Monday",likes:"834",c1:"#F0EBE3",c2:"#2C3E50",c3:"#C4A882",action:"+ CLOSET"},
+    {user:"@jess.styles",followers:"12.4k",outfit:"Vintage Saturday",likes:"412",c1:"#C8A96E",c2:"#1A1A1A",c3:"#8B6B4A",action:"♡ SAVE"},
+    {user:"@the.closet.co",followers:"31k",outfit:"Coastal Summer",likes:"291",c1:"#E8E0D4",c2:"#D4C8B8",c3:"#C4B8A4",action:"+ CLOSET"},
+  ];
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#0D0D0D",padding:"24px 20px",overflow:"hidden"}}>
+      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,fontWeight:300,color:"#F0EBE3",marginBottom:14}}>Discover</div>
+      {posts[0] && (
+        <div style={{background:"#141414",borderRadius:14,overflow:"hidden",border:"1px solid #1E1E1E",marginBottom:10}}>
+          <div style={{height:72,background:`linear-gradient(135deg,${posts[0].c1}22,${posts[0].c2}33,${posts[0].c3}22)`,display:"flex",alignItems:"flex-end",padding:"0 12px 8px"}}>
+            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:"#F0EBE3",fontWeight:300}}>{posts[0].outfit}</div>
+          </div>
+          <div style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:22,height:22,borderRadius:"50%",background:"#2A2A2A",flexShrink:0}}/>
+            <div style={{fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#5A5048",flex:1}}>{posts[0].user} · {posts[0].followers}</div>
+            <span style={{fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#5A5048"}}>♡ {posts[0].likes}</span>
+            <span style={{fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#C4A882",marginLeft:4}}>{posts[0].action}</span>
+          </div>
+        </div>
+      )}
+      {/* Trend card */}
+      <div style={{borderRadius:14,overflow:"hidden",border:"1px solid #1E1E1E",marginBottom:10}}>
+        <div style={{height:28,background:"linear-gradient(135deg,#D4C4A866,#8A786044,#C0B09066)",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 12px"}}>
+          <div style={{fontFamily:"Montserrat,sans-serif",fontSize:9,fontWeight:600,letterSpacing:1.5,color:"#5A5040",background:"#0D0D0D55",padding:"2px 7px",borderRadius:4}}>TRENDING NOW</div>
+          <div style={{display:"flex",gap:4}}>
+            {["#D4C4A8","#8A7860","#C0B090","#E8E0D0"].map(c=>(
+              <div key={c} style={{width:10,height:10,borderRadius:"50%",background:c,border:"1px solid #0D0D0D44"}}/>
+            ))}
+          </div>
+        </div>
+        <div style={{background:"#141414",padding:"10px 12px"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:"#F0EBE3"}}>Quiet Luxury</div>
+            <div style={{background:"#0A1A0A",border:"1px solid #1A3A1A",borderRadius:6,padding:"3px 8px",fontFamily:"Montserrat,sans-serif",fontSize:9,color:"#60A870"}}>3 in closet</div>
+          </div>
+          <div style={{display:"flex",gap:5}}>
+            {["neutral","minimal","investment"].map(t=>(
+              <div key={t} style={{background:"#1A1A1A",borderRadius:8,padding:"3px 8px",fontFamily:"Montserrat,sans-serif",fontSize:9,color:"#4A4038"}}>{t}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {posts.slice(1).map(p=>(
+        <div key={p.user} style={{background:"#141414",borderRadius:14,overflow:"hidden",border:"1px solid #1E1E1E",marginBottom:10}}>
+          <div style={{height:60,background:`linear-gradient(135deg,${p.c1}22,${p.c2}33,${p.c3}22)`,display:"flex",alignItems:"flex-end",padding:"0 12px 8px"}}>
+            <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,color:"#F0EBE3",fontWeight:300}}>{p.outfit}</div>
+          </div>
+          <div style={{padding:"7px 12px",display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:20,height:20,borderRadius:"50%",background:"#2A2A2A",flexShrink:0}}/>
+            <div style={{fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#5A5048",flex:1}}>{p.user} · {p.followers}</div>
+            <span style={{fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#5A5048"}}>♡ {p.likes}</span>
+            <span style={{fontFamily:"Montserrat,sans-serif",fontSize:10,color:"#C4A882",marginLeft:4}}>{p.action}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ObSlide5(){
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#0D0D0D",padding:"28px 24px"}}>
+      <div style={{fontFamily:"Montserrat,sans-serif",fontSize:11,letterSpacing:2,color:"#5A5048",marginBottom:4}}>MEMBERS ONLY</div>
+      <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:300,color:"#F0EBE3",marginBottom:20}}>The Vault ✦</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+        {[["✦","AI Stylist"],["📅","Planner"],["✈️","Vacation"],["📊","Stats"],["🛍","Shoppers"],["📈","Trends"]].map(([ic,l])=>(
+          <div key={l} style={{background:"#141414",borderRadius:14,padding:"14px 10px",border:"1px solid #2A2A2A",textAlign:"center"}}>
+            <div style={{fontSize:24,marginBottom:6}}>{ic}</div>
+            <div style={{fontFamily:"Montserrat,sans-serif",fontSize:11,color:"#6A5A48"}}>{l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:"linear-gradient(135deg,#14100A,#1E1812)",borderRadius:14,padding:"16px",border:"1px solid #C4A88233",textAlign:"center"}}>
+        <div style={{fontFamily:"Montserrat,sans-serif",fontSize:11,color:"#C4A882",letterSpacing:1,marginBottom:10}}>FROM $4 / MONTH</div>
+        <div style={{padding:"12px",borderRadius:10,background:"linear-gradient(135deg,#C4A882,#8A6E54)",fontFamily:"Montserrat,sans-serif",fontSize:12,fontWeight:600,color:"#0D0D0D",letterSpacing:1.5}}>UNLOCK THE VAULT</div>
+      </div>
+    </div>
+  );
+}
+
+const OB_BANNERS=[
+  null,
+  {label:"AI FILLS IN THE DETAILS",body:"Add pieces in seconds. Snap a photo, paste a URL, or describe an item — AI identifies everything automatically."},
+  {label:"SWIPE · LOCK · STYLE WITH AI",body:"Double-tap to lock a piece you love, then let AI fill the rest — or build every look yourself."},
+  {label:"FEED · TRENDS · WISHLIST",body:"Browse style inspiration from creators you follow, save looks you love, and add items directly to your wishlist."},
+  {label:"PREMIUM FEATURES",body:"AI stylist, occasion planner, vacation packer, wear stats & personal shopper — from $4/month."},
+];
+const OB_SCREENS=[ObSlide1,ObSlide2,ObSlide3,ObSlide4,ObSlide5];
+
+function Onboarding({onDone}){
+  const [slide,setSlide]=useState(0);
+  const [exiting,setExiting]=useState(false);
+  const touchStartX=useRef(null);
+  const total=OB_SCREENS.length;
+
+  const goNext=()=>{ if(slide<total-1) setSlide(s=>s+1); else finish(); };
+  const goPrev=()=>{ if(slide>0) setSlide(s=>s-1); };
+  const finish=()=>{
+    setExiting(true);
+    try{ localStorage.setItem("outfix_onboarded","1"); }catch(e){}
+    setTimeout(()=>onDone(),400);
+  };
+  const onTouchStart=e=>{ touchStartX.current=e.touches[0].clientX; };
+  const onTouchEnd=e=>{
+    if(touchStartX.current===null) return;
+    const dx=e.changedTouches[0].clientX-touchStartX.current;
+    touchStartX.current=null;
+    if(dx<-50) goNext();
+    else if(dx>50) goPrev();
+  };
+
+  const Screen=OB_SCREENS[slide];
+  const banner=OB_BANNERS[slide];
+
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:200,background:"#0D0D0D",display:"flex",flexDirection:"column",maxWidth:430,margin:"0 auto",fontFamily:"'Cormorant Garamond','Georgia',serif",color:"#F0EBE3",opacity:exiting?0:1,transition:"opacity 0.4s ease"}}
+      onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <style>{`@keyframes obIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}`}</style>
+
+      {/* Skip */}
+      <div style={{display:"flex",justifyContent:"flex-end",padding:"20px 24px 0",flexShrink:0}}>
+        {slide<total-1&&<button onClick={finish} style={{background:"none",border:"none",cursor:_p,fontFamily:"Montserrat,sans-serif",fontSize:13,fontWeight:400,color:"#3A3028",letterSpacing:1.5}}>SKIP</button>}
+      </div>
+
+      {/* Slide content + banner */}
+      <div key={slide} style={{flex:1,display:"flex",flexDirection:"column",animation:"obIn 0.35s ease forwards",overflow:"hidden"}}>
+        <Screen/>
+        {banner&&(
+          <div style={{background:"linear-gradient(135deg,#1A1610,#141008)",borderTop:"1px solid #C4A88244",padding:"20px 24px 22px",flexShrink:0}}>
+            <div style={{fontFamily:"Montserrat,sans-serif",fontSize:11,fontWeight:600,letterSpacing:2,color:"#C4A882",marginBottom:8}}>{banner.label}</div>
+            <div style={{fontFamily:"Montserrat,sans-serif",fontSize:13,color:"#7A6A58",lineHeight:1.7}}>{banner.body}</div>
+          </div>
+        )}
+      </div>
+
+      {/* Dots + CTA */}
+      <div style={{padding:"16px 28px 48px",display:"flex",flexDirection:"column",alignItems:"center",gap:16,flexShrink:0,background:"#0D0D0D"}}>
+        <div style={{display:"flex",gap:8}}>
+          {Array.from({length:total}).map((_,i)=>(
+            <div key={i} onClick={()=>setSlide(i)} style={{width:i===slide?26:8,height:8,borderRadius:4,background:i===slide?"#C4A882":"#2A2418",transition:"all 0.3s ease",cursor:_p}}/>
+          ))}
+        </div>
+        <button onClick={goNext} style={{width:"100%",padding:"18px",borderRadius:16,background:`linear-gradient(135deg,#C4A882,#8A6E54)`,border:"none",fontFamily:"Montserrat,sans-serif",fontSize:14,fontWeight:700,color:"#0D0D0D",letterSpacing:2,cursor:_p,boxShadow:"0 4px 24px #C4A88244"}}>
+          {slide===total-1?"GET STARTED":"NEXT  →"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -5991,11 +8164,14 @@ export default function App(){
   },[]);
 
   const handleAuth = (sess) => {
-    // Hard gate — only allow entry if there is a real JWT access_token
     if (!sess?.access_token || typeof sess.access_token !== "string" || !sess.access_token.startsWith("eyJ")) {
       console.warn("handleAuth blocked — no valid token:", sess);
       return;
     }
+    // Show onboarding for first-time users
+    try {
+      if(!localStorage.getItem("outfix_onboarded")) setShowOnboarding(true);
+    } catch(e){}
     setSession(sess);
   };
   const handleSignOut = async () => {
@@ -6015,64 +8191,177 @@ export default function App(){
   const [currentPlan,setCurrentPlan]     = useState("free");
   const [notifications,setNotifications] = useState(initNotifications);
   const [closetLoading,setClosetLoading] = useState(false);
+  const [showOnboarding,setShowOnboarding] = useState(false);
+  const [userProfile,setUserProfile] = useState({username:"",bio:"",location:"",styleIdentity:""});
 
   // ── Load user's closet from Supabase on login ──
   useEffect(()=>{
     if(!session?.access_token) return;
     setClosetLoading(true);
-    console.log("Loading closet for user:", session.user?.id);
 
-    // Load items and outfits in parallel
-    Promise.all([
-      sb.select("items", session.access_token, `&user_id=eq.${session.user.id}`),
-      sb.select("outfits", session.access_token, `&user_id=eq.${session.user.id}`),
-    ]).then(([itemData, outfitData])=>{
-      console.log("Supabase items response:", JSON.stringify(itemData)?.slice(0,200));
-      console.log("Supabase outfits response:", JSON.stringify(outfitData)?.slice(0,200));
+    const userId = session.user?.id ||
+      (() => { try { return JSON.parse(atob(session.access_token.split(".")[1])).sub; } catch(e){ return null; } })();
 
-      // Check for Supabase error response
-      if(itemData?.code || itemData?.error){
-        console.error("Items load error:", itemData);
-      } else if(Array.isArray(itemData) && itemData.length > 0){
-        const mapped = itemData.map(r=>({
-          id: r.id,
-          name: r.name,
-          brand: r.brand || "",
-          category: r.category || "Tops",
-          color: r.color || "#C4A882",
-          price: r.price || 0,
-          wearCount: r.wear_count || 0,
-          lastWorn: r.last_worn || "Never",
-          purchaseDate: r.purchase_date || "",
-          condition: r.condition || "Good",
-          forSale: r.for_sale || false,
-          emoji: r.emoji || "👚",
-          tags: r.tags || [],
-          sourceImage: r.source_image || null,
-        }));
-        console.log("Loaded", mapped.length, "items from Supabase");
-        setItems(mapped);
-      } else {
-        console.log("No items in Supabase, keeping demo items. itemData:", itemData);
+    if(!userId){ console.error("No userId found in session"); setClosetLoading(false); return; }
+    console.log("Loading closet for user:", userId);
+
+    (async () => {
+    try {
+    // Explicitly filter by user_id — belt AND suspenders alongside RLS
+    const [itemData, outfitData, wishlistData] = await Promise.all([
+      sb.select("items", session.access_token, `&user_id=eq.${userId}`).catch(e=>{ console.error("items load failed:", e); return []; }),
+      sb.select("outfits", session.access_token, `&user_id=eq.${userId}`).catch(e=>{ console.error("outfits load failed:", e); return []; }),
+      sb.select("wishlist", session.access_token, `&user_id=eq.${userId}`).catch(e=>{ console.error("wishlist load failed:", e); return []; }),
+    ]);
+
+    console.log("Supabase items response:", JSON.stringify(itemData)?.slice(0,200));
+    console.log("Supabase outfits response:", JSON.stringify(outfitData)?.slice(0,200));
+
+    // ── Items ──
+    if(itemData?.code || itemData?.error){
+      console.error("Items load error:", itemData);
+    } else if(Array.isArray(itemData) && itemData.length > 0){
+      const mapped = itemData.map(r=>({
+        id: r.id,
+        name: r.name,
+        brand: r.brand || "",
+        category: r.category || "Tops",
+        color: r.color || "#C4A882",
+        price: r.price || 0,
+        wearCount: r.wear_count || 0,
+        lastWorn: r.last_worn || "Never",
+        purchaseDate: r.purchase_date || "",
+        condition: r.condition || "Good",
+        forSale: r.for_sale || false,
+        emoji: r.emoji || "👚",
+        tags: r.tags || [],
+        sourceImage: r.source_image || null,
+      }));
+      console.log("Loaded", mapped.length, "items from Supabase");
+      setItems(mapped);
+    } else {
+      console.log("No items in Supabase — seeding demo items");
+      if(userId) {
+        Promise.all(initItems.map(item =>
+          sb.insert("items", session.access_token, {
+            user_id: userId,
+            name: item.name, brand: item.brand, category: item.category,
+            color: item.color, price: item.price, wear_count: item.wearCount || 0,
+            last_worn: item.lastWorn || "Never", purchase_date: item.purchaseDate || "",
+            condition: item.condition || "Good", for_sale: item.forSale || false,
+            emoji: item.emoji || "👚", tags: item.tags || [], source_image: null,
+          })
+        )).then(results => {
+          const seeded = results.map((r,i) => {
+            const row = Array.isArray(r) ? r[0] : r;
+            return row?.id ? { ...initItems[i], id: row.id } : initItems[i];
+          });
+          setItems(seeded);
+        }).catch(() => {});
       }
+    }
 
-      if(Array.isArray(outfitData) && outfitData.length > 0){
-        const mapped = outfitData.map(r=>({
-          id: r.id,
-          name: r.name,
-          occasion: r.occasion || "Casual",
-          season: r.season || "All Year",
-          items: r.item_ids || [],
-          wornHistory: r.worn_history || [],
-        }));
-        console.log("Loaded", mapped.length, "outfits from Supabase");
-        setOutfits(mapped);
-      }
-      setClosetLoading(false);
-    }).catch(e=>{ console.error("Closet load error:", e); setClosetLoading(false); });
+    // ── Outfits ──
+    if(Array.isArray(outfitData) && outfitData.length > 0){
+      const mapped = outfitData.map(r=>({
+        id: r.id,
+        name: r.name,
+        occasion: r.occasion || "Casual",
+        season: r.season || "All Year",
+        items: r.item_ids || [],
+        wornHistory: r.worn_history || [],
+      }));
+      console.log("Loaded", mapped.length, "outfits from Supabase");
+      setOutfits(mapped);
+    }
+
+    // ── Wishlist ──
+    if(Array.isArray(wishlistData) && wishlistData.length > 0){
+      const mapped = wishlistData.map(r=>({
+        id: r.id,
+        name: r.name,
+        brand: r.brand || "",
+        price: r.price || 0,
+        emoji: r.emoji || "♡",
+        gap: r.gap || "",
+        inMarket: r.in_market || false,
+        sourceImage: r.source_image || null,
+        color: r.color || null,
+      }));
+      console.log("Loaded", mapped.length, "wishlist items from Supabase");
+      setWishlist(mapped);
+    }
+
+    setClosetLoading(false);
+    } catch(e) { console.error("Closet load error:", e); setClosetLoading(false); }
+    })();
   },[session]);
 
-  // ── Save a new item to Supabase ──
+  // ── Load profile from Supabase ──
+  useEffect(()=>{
+    if(!session?.access_token) return;
+    (async()=>{
+      try{
+        const data = await sb.select("profiles", session.access_token, `&id=eq.${session.user?.id}`);
+        if(data?.[0]){
+          const p = data[0];
+          setUserProfile({
+            username: p.username||"",
+            bio: p.bio||"",
+            location: p.location||"",
+            styleIdentity: p.style_identity||"",
+          });
+        }
+      }catch(e){}
+    })();
+  },[session]);
+
+  const saveProfile = async (updates) => {
+    if(!session?.access_token) return;
+    const userId = session.user?.id;
+    if(!userId) return;
+    const merged = {...userProfile,...updates};
+    setUserProfile(merged);
+    try{
+      // Use upsert — id in body + explicit filter ensures only own row is touched
+      const r = await fetch(`${SB_URL}/rest/v1/profiles?id=eq.${userId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+          "apikey": SB_KEY,
+          "Prefer": "return=representation",
+        },
+        body: JSON.stringify({
+          username: merged.username,
+          bio: merged.bio,
+          location: merged.location,
+          style_identity: merged.styleIdentity,
+          updated_at: new Date().toISOString(),
+        }),
+      });
+      // If no row existed yet (new user), fall back to INSERT
+      if(r.status === 404 || r.status === 406) {
+        await fetch(`${SB_URL}/rest/v1/profiles`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${session.access_token}`,
+            "apikey": SB_KEY,
+            "Prefer": "resolution=merge-duplicates,return=representation",
+          },
+          body: JSON.stringify({
+            id: userId,
+            username: merged.username,
+            bio: merged.bio,
+            location: merged.location,
+            style_identity: merged.styleIdentity,
+            updated_at: new Date().toISOString(),
+          }),
+        });
+      }
+    }catch(e){ console.error("saveProfile error:", e); }
+  };
   const saveItemToDB = async (item) => {
     if(!session?.access_token) return;
     try {
@@ -6125,7 +8414,8 @@ export default function App(){
   const updateWearInDB = async (id, wearCount) => {
     if(!session?.access_token) return;
     try {
-      await sb.update("items", session.access_token, id, { wear_count: wearCount, last_worn: "Today" });
+      const today = new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+      await sb.update("items", session.access_token, id, { wear_count: wearCount, last_worn: today });
     } catch(e){ console.error("updateWearInDB error:", e); }
   };
 
@@ -6157,6 +8447,54 @@ export default function App(){
     } catch(e){ console.error("deleteOutfitFromDB error:", e); }
   };
 
+  // ── Save a wishlist item to Supabase ──
+  const saveWishlistItemToDB = async (item) => {
+    if(!session?.access_token) return;
+    try {
+      const userId = session.user?.id || session.user_id ||
+        (() => { try { return JSON.parse(atob(session.access_token.split(".")[1])).sub; } catch(e){ return null; } })();
+      if(!userId) return;
+      // Coerce price to a number — guard against strings like "$25-45"
+      const price = typeof item.price === "number" ? item.price
+        : parseInt(String(item.price).replace(/[^\d]/g,"")) || 0;
+      const res = await sb.insert("wishlist", session.access_token, {
+        user_id: userId,
+        name: item.name || "Unnamed",
+        brand: item.brand || "",
+        price,
+        emoji: item.emoji || "♡",
+        gap: item.gap || "",
+        in_market: item.inMarket || false,
+        source_image: item.sourceImage || null,
+        color: item.color || null,
+      });
+      console.log("saveWishlistItemToDB result:", JSON.stringify(res)?.slice(0,200));
+    } catch(e){ console.error("saveWishlistItemToDB error:", e); }
+  };
+
+  // ── Delete a wishlist item from Supabase ──
+  const deleteWishlistItemFromDB = async (id) => {
+    if(!session?.access_token) return;
+    try {
+      await sb.delete("wishlist", session.access_token, id);
+    } catch(e){ console.error("deleteWishlistItemFromDB error:", e); }
+  };
+
+  // ── Wishlist helpers (state + DB) ──
+  const addToWishlist = (item) => {
+    setWishlist(prev => {
+      if(prev.find(w => w.name === item.name)) return prev;
+      const newItem = { id: item.id || Date.now(), ...item };
+      saveWishlistItemToDB(newItem);
+      return [...prev, newItem];
+    });
+  };
+
+  const removeFromWishlist = (id) => {
+    setWishlist(prev => prev.filter(w => w.id !== id));
+    deleteWishlistItemFromDB(id);
+  };
+
   // ── New feature state ──
   const [showPushNotifs,setShowPushNotifs] = useState(false);
   const [appEvents,setAppEvents] = useState(calendarEvents);
@@ -6168,19 +8506,28 @@ export default function App(){
   const logWear = (outfitId) => {
     const today = new Date();
     const key = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+    const displayDate = today.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+    let outfitItemIds = [];
     setOutfits(prev => prev.map(o => {
       if(o.id !== outfitId) return o;
       const already = (o.wornHistory||[]).includes(key);
-      return { ...o, wornHistory: already ? o.wornHistory : [key, ...(o.wornHistory||[])] };
+      if(!already) {
+        const newHistory = [key, ...(o.wornHistory||[])];
+        outfitItemIds = o.items || [];
+        if(session?.access_token) {
+          sb.update("outfits", session.access_token, outfitId, { worn_history: newHistory }).catch(()=>{});
+        }
+        return { ...o, wornHistory: newHistory };
+      }
+      outfitItemIds = o.items || [];
+      return o;
     }));
-    setItems(prev => {
-      const outfit = outfits.find(o => o.id === outfitId);
-      if(!outfit) return prev;
-      return prev.map(i => outfit.items.includes(i.id)
-        ? { ...i, wearCount: i.wearCount+1, lastWorn: "Today" }
-        : i
-      );
-    });
+    setItems(prev => prev.map(i => {
+      if(!outfitItemIds.includes(i.id)) return i;
+      const newCount = i.wearCount + 1;
+      updateWearInDB(i.id, newCount);
+      return { ...i, wearCount: newCount, lastWorn: displayDate };
+    }));
   };
   const handleSubscribe = (planId) => {
     setCurrentPlan(planId);
@@ -6192,9 +8539,58 @@ export default function App(){
   const badge = planBadge[currentPlan];
 
   const tabs = [
-    ["home","Home","🏠"],["closet","Closet",null],["outfits","Outfits","🪡"],
-    ["market","Market","🛍"],["vault","Vault","✦"],
+    ["home","Home",null],["closet","Closet",null],["outfits","Outfits",null],
+    ["market","Market",null],["vault","Vault",null],
   ];
+
+  // SVG nav icons — black/gold theme, consistent 20×20 viewport
+  const NavIcon = ({id, active}) => {
+    const c = active ? G : "#4A4038";
+    const icons = {
+      home: (
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M2 9L10 2L18 9V18H13V13H7V18H2V9Z" stroke={c} strokeWidth="1.4" strokeLinejoin="round" fill="none"/>
+        </svg>
+      ),
+      closet: (
+        <svg width="20" height="18" viewBox="0 -2 20 18" fill="none">
+          <path d="M10 1 C10 1 10 0 11.5 0 C13 0 13 1.5 13 1.5 C13 2.5 12 3 10 4" stroke={c} strokeWidth="1.4" strokeLinecap="round" fill="none"/>
+          <path d="M10 4 C7 5.5 2 8 1 9 C0.5 9.5 1 10 1.5 10 L18.5 10 C19 10 19.5 9.5 19 9 C18 8 13 5.5 10 4Z" stroke={c} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+        </svg>
+      ),
+      outfits: (
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <rect x="3" y="2" width="14" height="16" rx="2" stroke={c} strokeWidth="1.4" fill="none"/>
+          <line x1="6" y1="7" x2="14" y2="7" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+          <line x1="6" y1="10.5" x2="14" y2="10.5" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+          <line x1="6" y1="14" x2="11" y2="14" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+        </svg>
+      ),
+      market: (
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M3 4H17L15.5 12H4.5L3 4Z" stroke={c} strokeWidth="1.4" strokeLinejoin="round" fill="none"/>
+          <circle cx="7" cy="16" r="1.5" stroke={c} strokeWidth="1.3" fill="none"/>
+          <circle cx="13" cy="16" r="1.5" stroke={c} strokeWidth="1.3" fill="none"/>
+          <path d="M1 1H3L3 4" stroke={c} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+          <line x1="6" y1="8" x2="6" y2="12" stroke={c} strokeWidth="1.1" strokeLinecap="round" opacity="0.6"/>
+          <line x1="10" y1="8" x2="10" y2="12" stroke={c} strokeWidth="1.1" strokeLinecap="round" opacity="0.6"/>
+          <line x1="14" y1="8" x2="14" y2="12" stroke={c} strokeWidth="1.1" strokeLinecap="round" opacity="0.6"/>
+        </svg>
+      ),
+      vault: (
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <rect x="2" y="3" width="16" height="14" rx="2.5" stroke={c} strokeWidth="1.4" fill="none"/>
+          <circle cx="10" cy="10" r="3" stroke={c} strokeWidth="1.3" fill="none"/>
+          <circle cx="10" cy="10" r="1" fill={c}/>
+          <line x1="10" y1="7" x2="10" y2="5" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+          <line x1="13" y1="10" x2="15" y2="10" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+          <line x1="7" y1="10" x2="5" y2="10" stroke={c} strokeWidth="1.3" strokeLinecap="round"/>
+          <line x1="18" y1="7" x2="18" y2="13" stroke={c} strokeWidth="1.4" strokeLinecap="round"/>
+        </svg>
+      ),
+    };
+    return <div style={{opacity:active?1:0.4,transition:"opacity 0.2s"}}>{icons[id]||null}</div>;
+  };
 
   // Notification badge count
   const unreadPush = initPushNotifs.filter(n=>!n.read).length;
@@ -6253,8 +8649,12 @@ export default function App(){
 
       {/* ── CONTENT ── */}
       <div className="sc" style={{height:"calc(100vh - 130px)",paddingBottom:80}}>
-        {tab==="home"     && <HomeTab items={items} outfits={outfits} showToast={showToast} setTab={setTab} setWishlist={setWishlist} setItems={setItems} />}
-        {tab==="closet"    && <ClosetTab items={items} setItems={setItems} setSelectedItem={setSelectedItem} showToast={showToast} wishlist={wishlist} setWishlist={setWishlist} onSaveItem={saveItemToDB}/>}
+        {tab==="home"     && <HomeTab items={items} outfits={outfits} showToast={showToast} setTab={setTab} setWishlist={setWishlist} addToWishlist={addToWishlist} removeFromWishlist={removeFromWishlist} setItems={setItems} session={session} onAddToCloset={async(item)=>{
+          const newItem={...item,id:Date.now()};
+          setItems(prev=>[...prev,newItem]);
+          await saveItemToDB(newItem);
+        }}/>}
+        {tab==="closet"    && <ClosetTab items={items} setItems={setItems} setSelectedItem={setSelectedItem} showToast={showToast} wishlist={wishlist} setWishlist={setWishlist} addToWishlist={addToWishlist} removeFromWishlist={removeFromWishlist} onSaveItem={saveItemToDB}/>}
         {tab==="outfits"   && <OutfitsTab items={items} outfits={outfits} setOutfits={setOutfits} setItems={setItems} showToast={showToast} logWear={logWear} onSaveOutfit={saveOutfitToDB} onDeleteOutfit={deleteOutfitFromDB}/>}
         {tab==="market"    && (
           <div className="fu" style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"40px 32px",textAlign:"center",minHeight:"60vh"}}>
@@ -6280,7 +8680,7 @@ export default function App(){
             </button>
           </div>
         )}
-        {tab==="vault"     && <VaultTab items={items} outfits={outfits} showToast={showToast} wishlist={wishlist} setWishlist={setWishlist} currentPlan={currentPlan} setShowPricing={setShowPricing} logWear={logWear} events={appEvents} setEvents={setAppEvents}/>}
+        {tab==="vault"     && <VaultTab items={items} outfits={outfits} showToast={showToast} wishlist={wishlist} setWishlist={setWishlist} addToWishlist={addToWishlist} removeFromWishlist={removeFromWishlist} currentPlan={currentPlan} setShowPricing={setShowPricing} logWear={logWear} events={appEvents} setEvents={setAppEvents}/>}
       </div>
 
       {/* ── BOTTOM NAV ── */}
@@ -6294,7 +8694,7 @@ export default function App(){
         padding:"8px 0 12px",
         zIndex:20,
       }}>
-        {tabs.map(([key,lbl,icon])=>{
+        {tabs.map(([key,lbl])=>{
           const isActive=tab===key;
           const iconColor=isActive?G:"#4A4038";
           return(
@@ -6303,17 +8703,7 @@ export default function App(){
               background:"none",border:"none",cursor:_p,padding:"2px 6px",
               flex:1,
             }}>
-              {key==="closet"?(
-                <svg width="20" height="18" viewBox="0 -2 20 18" fill="none" style={{opacity:isActive?1:0.35,transition:"opacity 0.2s"}}>
-                  {/* Hook at top */}
-                  <path d="M10 1 C10 1 10 0 11.5 0 C13 0 13 1.5 13 1.5 C13 2.5 12 3 10 4" stroke={iconColor} strokeWidth="1.4" strokeLinecap="round" fill="none"/>
-                  {/* Shoulder bar */}
-                  <path d="M10 4 C7 5.5 2 8 1 9 C0.5 9.5 1 10 1.5 10 L18.5 10 C19 10 19.5 9.5 19 9 C18 8 13 5.5 10 4Z" stroke={iconColor} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-
-                </svg>
-              ):(
-                <span style={{fontSize:18,opacity:isActive?1:0.35,transition:"opacity 0.2s"}}>{icon}</span>
-              )}
+              <NavIcon id={key} active={isActive}/>
               <span style={{...ss(7,isActive?700:400,iconColor,{letterSpacing:0.8,transition:"color 0.2s"}),whiteSpace:"nowrap"}}>
                 {lbl.toUpperCase()}
               </span>
@@ -6332,7 +8722,7 @@ export default function App(){
               <button onClick={()=>setTab("home")} style={{width:30,height:30,borderRadius:"50%",background:_1a,border:_2a,...ss(12,400,MD),cursor:_p,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
             </div>
             <div className="sc" style={{overflowY:"auto",flex:1}}>
-              <SettingsTab currentPlan={currentPlan} setShowPricing={setShowPricing} showToast={showToast} items={items} userName={userName} userEmail={userEmail} onSignOut={handleSignOut}/>
+              <SettingsTab currentPlan={currentPlan} setShowPricing={setShowPricing} showToast={showToast} items={items} userName={userName} userEmail={userEmail} onSignOut={handleSignOut} userProfile={userProfile} saveProfile={saveProfile}/>
             </div>
           </div>
         </div>
@@ -6345,6 +8735,31 @@ export default function App(){
         onAddToOutfit={()=>{setTab("outfits");showToast("Opening outfit builder \u2746");}}
         showToast={showToast}
         onRemove={(id)=>{ setItems(prev=>prev.filter(i=>i.id!==id)); deleteItemFromDB(id); }}
+        onUpdate={(updated)=>{
+          setItems(prev=>prev.map(i=>i.id===updated.id?updated:i));
+          setSelectedItem(updated);
+          // Persist to Supabase
+          if(session?.access_token){
+            // Handle image upload if it's a new base64
+            const persist = async () => {
+              let sourceImageUrl = updated.sourceImage;
+              if(sourceImageUrl?.startsWith("data:")){
+                const userId = session.user?.id ||
+                  (() => { try { return JSON.parse(atob(session.access_token.split(".")[1])).sub; } catch(e){ return null; } })();
+                if(userId) sourceImageUrl = await sb.uploadPhoto(session.access_token, userId, sourceImageUrl) || sourceImageUrl;
+              }
+              sb.update("items", session.access_token, updated.id, {
+                name: updated.name,
+                brand: updated.brand,
+                price: updated.price,
+                purchase_date: updated.purchaseDate,
+                category: updated.category,
+                source_image: sourceImageUrl,
+              }).catch(e=>console.error("update item error:", e));
+            };
+            persist();
+          }
+        }}
       />
 
       {showPricing && (
@@ -6359,6 +8774,9 @@ export default function App(){
 
 
       {/* ── CAPSULE COLLECTIONS OVERLAY ── */}
+
+      {/* ── ONBOARDING ── */}
+      {showOnboarding && <Onboarding onDone={()=>setShowOnboarding(false)}/>}
 
       <Toast msg={toast} />
     </div>
