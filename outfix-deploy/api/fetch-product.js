@@ -1,10 +1,14 @@
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).end();
+  if(req.method !== 'POST') return res.status(405).end();
   const { url } = req.body;
-  if (!url) return res.status(400).json({ error: 'No URL' });
+  if(!url) return res.status(400).json({});
 
   try {
+    const controller = new AbortController();
+    setTimeout(()=>controller.abort(), 8000);
+
     const r = await fetch(url, {
+      signal: controller.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
         'Accept': 'text/html,application/xhtml+xml',
@@ -13,47 +17,45 @@ export default async function handler(req, res) {
     });
     const html = await r.text();
 
-    // ── 1. JSON-LD structured data (most accurate) ──
-    const jsonLdMatch = html.match(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi) || [];
-    for (const block of jsonLdMatch) {
+    // og:image
+    let image = null;
+    const ogImg = html.match(/property="og:image"[^>]*content="([^"]+)"/);
+    if(ogImg) image = ogImg[1];
+    if(!image){ const tw = html.match(/name="twitter:image"[^>]*content="([^"]+)"/); if(tw) image = tw[1]; }
+
+    // Price via JSON-LD
+    let price = null;
+    const ldBlocks = html.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)||[];
+    for(const b of ldBlocks){
       try {
-        const inner = block.replace(/<script[^>]*>/, '').replace(/<\/script>/, '');
-        const data = JSON.parse(inner);
-        const product = Array.isArray(data) ? data.find(d => d['@type'] === 'Product') : data['@type'] === 'Product' ? data : null;
-        if (product) {
-          const price = product.offers?.price || product.offers?.[0]?.price || null;
-          const image = Array.isArray(product.image) ? product.image[0] : product.image || null;
-          const name = product.name || null;
-          const brand = product.brand?.name || product.brand || null;
-          const description = product.description?.slice(0, 300) || null;
-          if (name || image || price) return res.json({ name, brand, price: price ? parseFloat(price) : null, image, description });
-        }
-      } catch (e) {}
+        const d = JSON.parse(b.replace(/<script[^>]*>/,'').replace(/<\/script>/,''));
+        const o = d.offers || d['@graph']?.find(n=>n.offers)?.offers;
+        if(o?.price){ price = parseFloat(o.price); break; }
+        if(o?.[0]?.price){ price = parseFloat(o[0].price); break; }
+      } catch(e){}
     }
 
-    // ── 2. Open Graph meta tags ──
-    const ogTitle = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i)?.[1] || null;
-    const ogImage = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i)?.[1] || null;
-    const ogDesc = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]+)"/i)?.[1]?.slice(0,300) || null;
+    // Price via meta tag
+    if(!price){ const m = html.match(/property="product:price:amount"[^>]*content="([^"]+)"/); if(m) price=parseFloat(m[1]); }
+    if(!price){ const m = html.match(/itemprop="price"[^>]*content="([^"]+)"/); if(m) price=parseFloat(m[1]); }
 
-    // ── 3. Price patterns ──
-    const priceMatch = html.match(/["']price["']\s*:\s*["']?([\d.]+)["']?/) ||
-                       html.match(/itemprop="price"[^>]*content="([\d.]+)"/) ||
-                       html.match(/class="[^"]*price[^"]*"[^>]*>\s*\$?([\d,]+\.?\d*)/i);
-    const price = priceMatch ? parseFloat(priceMatch[1].replace(',','')) : null;
+    // Name via og:title
+    let name = null;
+    const ogTitle = html.match(/property="og:title"[^>]*content="([^"]+)"/);
+    if(ogTitle) name = ogTitle[1];
 
-    // ── 4. Product name fallbacks ──
-    const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.split('|')[0]?.split('-')[0]?.trim() || null;
-    const h1Tag = html.match(/<h1[^>]*>([^<]+)<\/h1>/i)?.[1]?.trim() || null;
+    // Brand via og:site_name
+    let brand = null;
+    const ogBrand = html.match(/property="og:site_name"[^>]*content="([^"]+)"/);
+    if(ogBrand) brand = ogBrand[1];
 
-    return res.json({
-      name: ogTitle || h1Tag || titleTag || null,
-      brand: null,
-      price,
-      image: ogImage || null,
-      description: ogDesc || null,
-    });
-  } catch (e) {
-    return res.json({ name: null, brand: null, price: null, image: null, description: null });
+    // Description
+    let description = null;
+    const ogDesc = html.match(/property="og:description"[^>]*content="([^"]+)"/);
+    if(ogDesc) description = ogDesc[1];
+
+    res.status(200).json({ price, image, name, brand, description });
+  } catch(e) {
+    res.status(200).json({ price:null, image:null, name:null, brand:null, description:null });
   }
 }
