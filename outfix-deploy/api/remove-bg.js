@@ -13,7 +13,7 @@ export default async function handler(req, res) {
     const buffer = Buffer.from(base64Data, 'base64');
 
     const response = await fetch(
-      'https://api-inference.huggingface.co/models/briaai/RMBG-1.4',
+      'https://api-inference.huggingface.co/models/briaai/RMBG-2.0',
       {
         method: 'POST',
         headers: {
