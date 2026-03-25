@@ -1,3 +1,4 @@
+// OUTFIX v2026.03.25.B
 import { useState, useRef, useEffect, useMemo } from "react";
 
 // ── SUPABASE CLIENT ───────────────────────────────────────────────────────────
@@ -4376,7 +4377,6 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
               </div>
             </div>
           </div>
-        </div>
         );
       })()}
 
@@ -4456,6 +4456,7 @@ function OutfitsTab({items,outfits,setOutfits,setItems,showToast,logWear,onSaveO
           )}
             </div>
           </div>
+        </div>
         );
       })()}
 
