@@ -1,61 +1,125 @@
+// pages/api/fetch-product.js
+// Drop-in replacement — fetches og:image + price from any product URL
+// Works with Prada, Aritzia, Zara, etc. that block simple scrapers
+
 export default async function handler(req, res) {
-  if(req.method !== 'POST') return res.status(405).end();
+  if (req.method !== "POST") return res.status(405).end();
+
   const { url } = req.body;
-  if(!url) return res.status(400).json({});
+  if (!url) return res.status(400).json({ error: "No URL" });
 
   try {
-    const controller = new AbortController();
-    setTimeout(()=>controller.abort(), 8000);
-
-    const r = await fetch(url, {
-      signal: controller.signal,
+    // Fetch the page with real browser headers so Cloudflare / bot-protection passes
+    const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-      }
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        Referer: "https://www.google.com/",
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(10000),
     });
-    const html = await r.text();
 
-    // og:image
-    let image = null;
-    const ogImg = html.match(/property="og:image"[^>]*content="([^"]+)"/);
-    if(ogImg) image = ogImg[1];
-    if(!image){ const tw = html.match(/name="twitter:image"[^>]*content="([^"]+)"/); if(tw) image = tw[1]; }
-
-    // Price via JSON-LD
-    let price = null;
-    const ldBlocks = html.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)||[];
-    for(const b of ldBlocks){
-      try {
-        const d = JSON.parse(b.replace(/<script[^>]*>/,'').replace(/<\/script>/,''));
-        const o = d.offers || d['@graph']?.find(n=>n.offers)?.offers;
-        if(o?.price){ price = parseFloat(o.price); break; }
-        if(o?.[0]?.price){ price = parseFloat(o[0].price); break; }
-      } catch(e){}
+    if (!response.ok) {
+      return res.status(200).json({ image: null, price: null, name: null });
     }
 
-    // Price via meta tag
-    if(!price){ const m = html.match(/property="product:price:amount"[^>]*content="([^"]+)"/); if(m) price=parseFloat(m[1]); }
-    if(!price){ const m = html.match(/itemprop="price"[^>]*content="([^"]+)"/); if(m) price=parseFloat(m[1]); }
+    const html = await response.text();
 
-    // Name via og:title
+    // ── Extract og:image ──────────────────────────────────────────────────────
+    // Handles both attribute orderings and single/double quotes
+    const imagePatterns = [
+      /<meta[^>]+property=["']og:image:secure_url["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image:secure_url["']/i,
+      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
+      /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
+    ];
+
+    let image = null;
+    for (const pattern of imagePatterns) {
+      const match = html.match(pattern);
+      if (match?.[1]) {
+        image = match[1].replace(/&amp;/g, "&").trim();
+        // Skip tiny tracking pixels or data URIs
+        if (image.startsWith("data:") || image.includes("pixel") || image.includes("1x1")) {
+          image = null;
+          continue;
+        }
+        break;
+      }
+    }
+
+    // ── Extract price ─────────────────────────────────────────────────────────
+    const pricePatterns = [
+      /<meta[^>]+property=["']product:price:amount["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+property=["']og:price:amount["'][^>]+content=["']([^"']+)["']/i,
+      /"price"\s*:\s*"?([\d,]+\.?\d*)"?/,
+      /"priceValue"\s*:\s*([\d,]+\.?\d*)/,
+      /\$\s*([\d,]+(?:\.\d{2})?)/,
+    ];
+
+    let price = null;
+    for (const pattern of pricePatterns) {
+      const match = html.match(pattern);
+      if (match?.[1]) {
+        const parsed = parseFloat(match[1].replace(/,/g, ""));
+        if (!isNaN(parsed) && parsed > 0 && parsed < 50000) {
+          price = parsed;
+          break;
+        }
+      }
+    }
+
+    // ── Extract name ──────────────────────────────────────────────────────────
+    const namePatterns = [
+      /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i,
+      /<title>([^<]+)<\/title>/i,
+    ];
+
     let name = null;
-    const ogTitle = html.match(/property="og:title"[^>]*content="([^"]+)"/);
-    if(ogTitle) name = ogTitle[1];
+    for (const pattern of namePatterns) {
+      const match = html.match(pattern);
+      if (match?.[1]) {
+        // Strip site name suffix like " | Prada US" or " - Prada"
+        name = match[1]
+          .replace(/\s*[\|–\-]\s*.{0,30}$/, "")
+          .replace(/&amp;/g, "&")
+          .trim();
+        if (name.length > 2) break;
+      }
+    }
 
-    // Brand via og:site_name
+    // ── Extract brand ─────────────────────────────────────────────────────────
+    const brandPatterns = [
+      /<meta[^>]+property=["']og:brand["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+property=["']product:brand["'][^>]+content=["']([^"']+)["']/i,
+      /"brand"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"/i,
+    ];
+
     let brand = null;
-    const ogBrand = html.match(/property="og:site_name"[^>]*content="([^"]+)"/);
-    if(ogBrand) brand = ogBrand[1];
+    for (const pattern of brandPatterns) {
+      const match = html.match(pattern);
+      if (match?.[1]) { brand = match[1].trim(); break; }
+    }
 
-    // Description
-    let description = null;
-    const ogDesc = html.match(/property="og:description"[^>]*content="([^"]+)"/);
-    if(ogDesc) description = ogDesc[1];
+    return res.status(200).json({ image, price, name, brand });
 
-    res.status(200).json({ price, image, name, brand, description });
-  } catch(e) {
-    res.status(200).json({ price:null, image:null, name:null, brand:null, description:null });
+  } catch (err) {
+    console.error("fetch-product error:", err.message);
+    return res.status(200).json({ image: null, price: null, name: null, brand: null });
   }
 }
