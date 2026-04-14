@@ -115,7 +115,7 @@ export default async function handler(req, res) {
       if (/jeans?|denim|trouser|chino|pant|short|legging|jogger/.test(n)) return 'Bottoms';
       if (/dress|skirt|jumpsuit|romper/.test(n)) return 'Dresses';
       if (/jacket|coat|blazer|parka|puffer|windbreaker/.test(n)) return 'Outerwear';
-      if (/bag|wallet|belt|hat|scarf|watch|jewel|sunglasses/.test(n)) return 'Accessories';
+      if (/bag|wallet|belt|hat|scarf|watch|jewel|sunglasses|eyewear|glasses|spectacle|optical|sunglass/.test(n)) return 'Accessories';
       return claudeData.category || 'Tops';
     })(),
 
