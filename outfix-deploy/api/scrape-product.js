@@ -69,7 +69,7 @@ export default async function handler(req, res) {
     if (/jacket|coat|blazer|parka|puffer|windbreaker|hoodie|sweater|knitwear|cardigan/.test(s)) return 'Outerwear';
     if (/shoe|sneaker|boot|loafer|heel|sandal|trainer|runner/.test(s)) return 'Shoes';
     if (/pant|jeans?|denim|trouser|chino|short|legging|bottom|jogger|cargo/.test(s)) return 'Bottoms';
-    if (/bag|wallet|belt|hat|scarf|glove|jewel|watch|accessory|sunglasses/.test(s)) return 'Accessories';
+    if (/bag|wallet|belt|hat|scarf|glove|jewel|watch|accessory|sunglasses|eyewear|glasses|spectacle|optical|sunglass/.test(s)) return 'Accessories';
     return 'Tops';
   };
 
