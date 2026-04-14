@@ -68,7 +68,7 @@ export default async function handler(req, res) {
     if (/dress|skirt|jumpsuit|romper/.test(s)) return 'Dresses';
     if (/jacket|coat|blazer|parka|puffer|windbreaker|hoodie|sweater|knitwear|cardigan/.test(s)) return 'Outerwear';
     if (/shoe|sneaker|boot|loafer|heel|sandal|trainer|runner/.test(s)) return 'Shoes';
-    if (/pant|jean|trouser|short|legging|bottom/.test(s)) return 'Bottoms';
+    if (/pant|jeans?|denim|trouser|chino|short|legging|bottom|jogger|cargo/.test(s)) return 'Bottoms';
     if (/bag|wallet|belt|hat|scarf|glove|jewel|watch|accessory|sunglasses/.test(s)) return 'Accessories';
     return 'Tops';
   };
@@ -105,9 +105,10 @@ export default async function handler(req, res) {
       const og = parseOG(html);
 
       if (product) {
-        // Extract price from offers
+        // Extract price from offers — handle string prices, nested offers, OG fallback
         const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
-        const price = offer?.price || offer?.lowPrice || product.price || og.price || 0;
+        const rawPrice = offer?.price ?? offer?.lowPrice ?? offer?.highPrice ?? product.price ?? og.price ?? 0;
+        const price = parseFloat(String(rawPrice).replace(/[^0-9.]/g, '')) || 0;
 
         // Extract image — prefer array first image, then string
         const imgRaw = Array.isArray(product.image) ? product.image[0] : product.image;
@@ -120,9 +121,10 @@ export default async function handler(req, res) {
         // Extract brand
         const brand = (typeof product.brand === 'string' ? product.brand : product.brand?.name) || '';
 
-        // Extract category
+        // Extract category — check name first (most reliable), then JSON-LD category field
+        const nameBasedCat = mapCategory(product.name || '');
         const catRaw = product.category || product.itemCondition || '';
-        const category = mapCategory(catRaw) || mapCategory(product.name || '');
+        const category = nameBasedCat !== 'Tops' ? nameBasedCat : (mapCategory(catRaw) || nameBasedCat);
 
         const isComplete = product.name && brand && price > 0 && image;
 
