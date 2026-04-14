@@ -83,7 +83,7 @@ export default async function handler(req, res) {
     if (/shoe|sneaker|boot|loafer|heel|sandal|trainer|runner|footwear|kicks|court shoe|athletic shoe/.test(s)) return 'Shoes';
     if (/pant|jeans?|denim|trouser|chino|short|legging|bottom|jogger|cargo/.test(s)) return 'Bottoms';
     if (/bag|wallet|belt|hat|scarf|glove|jewel|watch|accessor|sunglasses|eyewear|glasses|spectacle|optical|sunglass/.test(s)) return 'Accessories';
-    return 'Tops';
+    return null; // no match — user must select
   };
 
   // Merge partial result with defaults
@@ -92,7 +92,7 @@ export default async function handler(req, res) {
     brand: data.brand || '',
     price: parseFloat(String(data.price).replace(/[^0-9.]/g, '')) || 0,
     color: data.color || '#2A2A2A',
-    category: data.category || 'Tops',
+    category: data.category || null,
     image: data.image || null,
     condition: 'Like New',
     tags: data.tags || [],
@@ -140,8 +140,8 @@ export default async function handler(req, res) {
         // Breadcrumbs are the most reliable signal: "Men's / Shoes / Casual Sneakers" → Shoes
         const breadcrumbCat = (product._breadcrumbs || [])
           .map(b => mapCategory(b))
-          .find(c => c !== 'Tops') || null;
-        const category = breadcrumbCat || (nameBasedCat !== 'Tops' ? nameBasedCat : (mapCategory(catRaw) || nameBasedCat));
+          .find(c => c !== null) || null;
+        const category = breadcrumbCat || (nameBasedCat || mapCategory(catRaw) || null);
 
         const isComplete = product.name && brand && price > 0 && image;
 
@@ -195,7 +195,7 @@ export default async function handler(req, res) {
             brand:    ext.brand    || result?.brand    || '',
             price:    ext.price    || result?.price    || 0,
             color:    ext.color    ? colorNameToHex(ext.color) : (result?.color || '#2A2A2A'),
-            category: ext.category ? mapCategory(ext.category) : (result?.category || 'Tops'),
+            category: ext.category ? mapCategory(ext.category) : (result?.category || null),
             image:    ext.image    || result?.image    || null,
           };
           result = buildResult(merged, 'firecrawl');
@@ -245,7 +245,7 @@ export default async function handler(req, res) {
           brand:    json.brand    || result?.brand    || '',
           price:    json.price    || result?.price    || 0,
           color:    json.color    || result?.color    || '#2A2A2A',
-          category: json.category || result?.category || 'Tops',
+          category: json.category || result?.category || null,
           image:    json.image    || result?.image    || null,
           tags:     json.tags     || [],
         };
