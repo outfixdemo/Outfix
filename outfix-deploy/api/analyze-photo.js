@@ -111,12 +111,12 @@ export default async function handler(req, res) {
     // Category: Claude wins on visual inference, but name-based check overrides misclassifications
     category: (()=>{
       const n = (claudeData.name || ocrName || '').toLowerCase();
-      if (/sneaker|shoe|boot|loafer|trainer|runner|sandal|heel|slipper|mule|clog/.test(n)) return 'Shoes';
+      if (/sneaker|shoe|boot|loafer|trainer|runner|sandal|heel|slipper|mule|clog|footwear|kicks/.test(n)) return 'Shoes';
       if (/jeans?|denim|trouser|chino|pant|short|legging|jogger/.test(n)) return 'Bottoms';
       if (/dress|skirt|jumpsuit|romper/.test(n)) return 'Dresses';
       if (/jacket|coat|blazer|parka|puffer|windbreaker/.test(n)) return 'Outerwear';
       if (/bag|wallet|belt|hat|scarf|watch|jewel|sunglasses|eyewear|glasses|spectacle|optical|sunglass/.test(n)) return 'Accessories';
-      return claudeData.category || 'Tops';
+      return claudeData.category || null; // no match — user must select
     })(),
 
     // Color: Claude always wins (visual inference)
