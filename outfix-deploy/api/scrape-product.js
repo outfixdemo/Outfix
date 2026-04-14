@@ -12,6 +12,7 @@ export default async function handler(req, res) {
   // Parse JSON-LD product schema from raw HTML
   const parseJsonLd = (html) => {
     const results = [];
+    const breadcrumbs = [];
     const re = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
     let m;
     while ((m = re.exec(html)) !== null) {
@@ -26,12 +27,24 @@ export default async function handler(req, res) {
           if (item['@graph']) {
             for (const g of item['@graph']) {
               if (g['@type'] === 'Product') results.push(g);
+              // Breadcrumbs in @graph
+              if (g['@type'] === 'BreadcrumbList' && g.itemListElement) {
+                breadcrumbs.push(...g.itemListElement.map(i => i.name || ''));
+              }
             }
+          }
+          // Top-level BreadcrumbList (e.g. Foot Locker: Men's / Shoes / Casual Sneakers)
+          if (item['@type'] === 'BreadcrumbList' && item.itemListElement) {
+            breadcrumbs.push(...item.itemListElement.map(i => i.name || ''));
           }
         }
       } catch (e) {}
     }
-    return results[0] || null;
+    const product = results[0] || null;
+    // Attach breadcrumb category hint to product if found
+    if (product && breadcrumbs.length) product._breadcrumbs = breadcrumbs;
+    if (!product && breadcrumbs.length) return { _breadcrumbs: breadcrumbs };
+    return product;
   };
 
   // Parse Open Graph tags from HTML
@@ -67,7 +80,7 @@ export default async function handler(req, res) {
     const s = str.toLowerCase();
     if (/dress|skirt|jumpsuit|romper/.test(s)) return 'Dresses';
     if (/jacket|coat|blazer|parka|puffer|windbreaker|hoodie|sweater|knitwear|cardigan/.test(s)) return 'Outerwear';
-    if (/shoe|sneaker|boot|loafer|heel|sandal|trainer|runner/.test(s)) return 'Shoes';
+    if (/shoe|sneaker|boot|loafer|heel|sandal|trainer|runner|footwear|kicks|court shoe|athletic shoe/.test(s)) return 'Shoes';
     if (/pant|jeans?|denim|trouser|chino|short|legging|bottom|jogger|cargo/.test(s)) return 'Bottoms';
     if (/bag|wallet|belt|hat|scarf|glove|jewel|watch|accessor|sunglasses|eyewear|glasses|spectacle|optical|sunglass/.test(s)) return 'Accessories';
     return 'Tops';
@@ -121,10 +134,14 @@ export default async function handler(req, res) {
         // Extract brand
         const brand = (typeof product.brand === 'string' ? product.brand : product.brand?.name) || '';
 
-        // Extract category — check name first (most reliable), then JSON-LD category field
+        // Extract category — breadcrumbs > name > JSON-LD category field
         const nameBasedCat = mapCategory(product.name || '');
         const catRaw = product.category || product.itemCondition || '';
-        const category = nameBasedCat !== 'Tops' ? nameBasedCat : (mapCategory(catRaw) || nameBasedCat);
+        // Breadcrumbs are the most reliable signal: "Men's / Shoes / Casual Sneakers" → Shoes
+        const breadcrumbCat = (product._breadcrumbs || [])
+          .map(b => mapCategory(b))
+          .find(c => c !== 'Tops') || null;
+        const category = breadcrumbCat || (nameBasedCat !== 'Tops' ? nameBasedCat : (mapCategory(catRaw) || nameBasedCat));
 
         const isComplete = product.name && brand && price > 0 && image;
 
