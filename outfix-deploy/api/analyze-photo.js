@@ -65,8 +65,9 @@ export default async function handler(req, res) {
     ocrText = response.fullTextAnnotation?.text || response.textAnnotations?.[0]?.description || '';
 
     // Extract price — look for patterns like $89, $129.00, £45, €60
-    const priceMatch = ocrText.match(/[$£€]\s*(\d+(?:\.\d{1,2})?)/);
-    if (priceMatch) ocrPrice = parseFloat(priceMatch[1]);
+    // Handle comma-separated prices: $1,130 / $1,299.00 / £450
+    const priceMatch = ocrText.match(/[$£€]\s*([\d,]+(?:\.\d{1,2})?)/);
+    if (priceMatch) ocrPrice = parseFloat(priceMatch[1].replace(/,/g, ''));
 
     // Extract brand from logo detection
     const logos = response.logoAnnotations || [];
@@ -107,8 +108,16 @@ export default async function handler(req, res) {
     // Price: OCR always wins if found (reading actual number); Claude's 0 is ignored
     price: ocrPrice > 0 ? ocrPrice : (claudeData.price || 0),
 
-    // Category: Claude always wins (visual inference)
-    category: claudeData.category || 'Tops',
+    // Category: Claude wins on visual inference, but name-based check overrides misclassifications
+    category: (()=>{
+      const n = (claudeData.name || ocrName || '').toLowerCase();
+      if (/sneaker|shoe|boot|loafer|trainer|runner|sandal|heel|slipper|mule|clog/.test(n)) return 'Shoes';
+      if (/jeans?|denim|trouser|chino|pant|short|legging|jogger/.test(n)) return 'Bottoms';
+      if (/dress|skirt|jumpsuit|romper/.test(n)) return 'Dresses';
+      if (/jacket|coat|blazer|parka|puffer|windbreaker/.test(n)) return 'Outerwear';
+      if (/bag|wallet|belt|hat|scarf|watch|jewel|sunglasses/.test(n)) return 'Accessories';
+      return claudeData.category || 'Tops';
+    })(),
 
     // Color: Claude always wins (visual inference)
     color: claudeData.color || '#2A2A2A',
