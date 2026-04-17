@@ -1,17 +1,14 @@
 // /api/scrape-product.js
-// Extracts product info from a retail URL and returns normalized JSON
-// for the add-item flow. Image extraction is prioritized to prefer
-// real product photos over color swatches or thumbnails.
+// Hybrid product scraper: HTML parsing for the image, Claude for structured fields.
 //
-// Strategy (in order):
-//   1. JSON-LD structured data (schema.org/Product) — most accurate
-//   2. <meta property="og:image"> — Open Graph
-//   3. <meta name="twitter:image">
-//   4. First large <img> with "product/hero/main" keywords
-//   5. Largest srcset variant from a <picture>/<img>
+// Why this split:
+//   - IMAGE extraction needs precise URL selection (avoid swatches/thumbnails),
+//     which is easier with deterministic HTML parsing + scoring.
+//   - TEXT fields (name, brand, category, color, price) benefit from AI
+//     inference because page structure varies wildly across retailers.
 //
-// Every candidate is validated against a blocklist of keywords that
-// typically indicate a swatch, thumbnail, or non-product asset.
+// Requires in Vercel env:
+//   ANTHROPIC_API_KEY
 
 export const config = {
   api: {
@@ -19,48 +16,32 @@ export const config = {
   },
 };
 
+// ────────────────────────────────────────────────────────────────────────────
+// IMAGE EXTRACTION — deterministic HTML parsing
+// ────────────────────────────────────────────────────────────────────────────
+
 // URL fragments that usually signal a BAD image (swatch, thumbnail, icon, etc.)
 const BAD_IMAGE_PATTERNS = [
-  /swatch/i,
-  /color[-_ ]?picker/i,
-  /thumbnail/i,
-  /\bthumb\b/i,
-  /sprite/i,
-  /icon/i,
-  /logo/i,
-  /placeholder/i,
-  /blank/i,
-  /spacer/i,
-  /1x1/i,
-  /pixel/i,
+  /swatch/i, /color[-_ ]?picker/i, /thumbnail/i, /\bthumb\b/i,
+  /sprite/i, /\bicon\b/i, /\blogo\b/i, /placeholder/i,
+  /blank/i, /spacer/i, /1x1/i, /pixel/i,
 ];
 
-// URL fragments that usually signal a GOOD product image
 const GOOD_IMAGE_PATTERNS = [
-  /product/i,
-  /\bhero\b/i,
-  /\bmain\b/i,
-  /primary/i,
-  /front/i,
-  /detail/i,
-  /large/i,
-  /\bfull\b/i,
+  /product/i, /\bhero\b/i, /\bmain\b/i, /primary/i,
+  /front/i, /detail/i, /large/i, /\bfull\b/i,
 ];
 
 function isLikelySwatch(url) {
   if (!url || typeof url !== 'string') return true;
-  // Obvious swatch indicators
   return BAD_IMAGE_PATTERNS.some(p => p.test(url));
 }
 
 function scoreImageUrl(url) {
   if (!url) return -100;
   let score = 0;
-  // Reject swatches
   if (isLikelySwatch(url)) return -50;
-  // Prefer known-good patterns
   for (const p of GOOD_IMAGE_PATTERNS) if (p.test(url)) score += 10;
-  // Prefer larger width params if present (e.g., ?w=1200, _1200x, -1200.jpg)
   const widthMatch = url.match(/[?&](w|width)=(\d+)|_(\d+)x|[-_](\d{3,4})\.(?:jpg|jpeg|png|webp)/i);
   if (widthMatch) {
     const width = parseInt(widthMatch[2] || widthMatch[3] || widthMatch[4] || '0', 10);
@@ -68,14 +49,11 @@ function scoreImageUrl(url) {
     else if (width >= 400) score += 10;
     else if (width < 200) score -= 20;
   }
-  // Prefer HTTPS
   if (url.startsWith('https://')) score += 2;
-  // Prefer non-data URLs (data URLs in HTML are usually placeholders)
   if (url.startsWith('data:')) score -= 30;
   return score;
 }
 
-// Extract all JSON-LD blocks from HTML
 function extractJsonLd(html) {
   const blocks = [];
   const regex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
@@ -83,16 +61,14 @@ function extractJsonLd(html) {
   while ((match = regex.exec(html)) !== null) {
     try {
       const parsed = JSON.parse(match[1].trim());
-      // Sometimes JSON-LD is wrapped in a @graph array
       if (Array.isArray(parsed)) blocks.push(...parsed);
       else if (parsed['@graph']) blocks.push(...parsed['@graph']);
       else blocks.push(parsed);
-    } catch (e) { /* malformed JSON — skip */ }
+    } catch (e) { /* malformed — skip */ }
   }
   return blocks;
 }
 
-// Find a Product entity in JSON-LD
 function findProduct(jsonLdBlocks) {
   for (const b of jsonLdBlocks) {
     const type = b['@type'];
@@ -101,7 +77,6 @@ function findProduct(jsonLdBlocks) {
   return null;
 }
 
-// Get a clean meta tag value
 function getMeta(html, property) {
   const patterns = [
     new RegExp(`<meta[^>]*property=["']${property}["'][^>]*content=["']([^"']+)["']`, 'i'),
@@ -116,7 +91,6 @@ function getMeta(html, property) {
   return null;
 }
 
-// Extract candidate images from <img> and srcset
 function extractImgCandidates(html) {
   const imgs = [];
   const imgRegex = /<img[^>]+>/gi;
@@ -125,23 +99,19 @@ function extractImgCandidates(html) {
     const tag = match[0];
     const srcMatch = tag.match(/\bsrc=["']([^"']+)["']/i);
     const srcsetMatch = tag.match(/\bsrcset=["']([^"']+)["']/i);
-    const altMatch = tag.match(/\balt=["']([^"']+)["']/i);
-    const classMatch = tag.match(/\bclass=["']([^"']+)["']/i);
-    if (srcMatch) imgs.push({ url: srcMatch[1], alt: altMatch?.[1] || '', className: classMatch?.[1] || '' });
+    if (srcMatch) imgs.push({ url: srcMatch[1] });
     if (srcsetMatch) {
-      // Parse srcset: "url1 300w, url2 600w, url3 1200w" → pick largest
       const candidates = srcsetMatch[1].split(',').map(s => {
         const parts = s.trim().split(/\s+/);
         return { url: parts[0], width: parseInt(parts[1] || '0', 10) };
       });
       candidates.sort((a, b) => b.width - a.width);
-      if (candidates[0]) imgs.push({ url: candidates[0].url, alt: altMatch?.[1] || '', className: classMatch?.[1] || '' });
+      if (candidates[0]) imgs.push({ url: candidates[0].url });
     }
   }
   return imgs;
 }
 
-// Pick the best image from all candidates
 function pickBestImage(candidates) {
   if (!candidates.length) return null;
   const scored = candidates.map(c => ({ ...c, score: scoreImageUrl(c.url) }));
@@ -150,19 +120,147 @@ function pickBestImage(candidates) {
   return best.score > -30 ? best.url : null;
 }
 
-// Resolve relative URL against the base URL
 function resolveUrl(src, baseUrl) {
   if (!src) return null;
   if (src.startsWith('//')) return 'https:' + src;
   if (src.startsWith('/')) {
-    try {
-      const u = new URL(baseUrl);
-      return `${u.protocol}//${u.host}${src}`;
-    } catch (e) { return src; }
+    try { const u = new URL(baseUrl); return `${u.protocol}//${u.host}${src}`; }
+    catch (e) { return src; }
   }
   if (src.startsWith('http')) return src;
   try { return new URL(src, baseUrl).toString(); } catch (e) { return src; }
 }
+
+function extractBestImage(html, baseUrl) {
+  // Priority 1: JSON-LD Product schema
+  const jsonLd = extractJsonLd(html);
+  const product = findProduct(jsonLd);
+  if (product) {
+    const imgField = product.image;
+    let productImages = [];
+    if (typeof imgField === 'string') productImages = [imgField];
+    else if (Array.isArray(imgField)) productImages = imgField.filter(x => typeof x === 'string');
+    else if (imgField && imgField.url) productImages = [imgField.url];
+    const best = pickBestImage(productImages.map(u => ({ url: u })));
+    if (best) return { url: resolveUrl(best, baseUrl), source: 'json-ld', product };
+  }
+
+  // Priority 2: Open Graph
+  const og = getMeta(html, 'og:image');
+  if (og && !isLikelySwatch(og)) return { url: resolveUrl(og, baseUrl), source: 'og:image', product };
+
+  // Priority 3: Twitter
+  const twitter = getMeta(html, 'twitter:image');
+  if (twitter && !isLikelySwatch(twitter)) return { url: resolveUrl(twitter, baseUrl), source: 'twitter:image', product };
+
+  // Priority 4: Best <img> tag
+  const candidates = extractImgCandidates(html);
+  const best = pickBestImage(candidates);
+  if (best) return { url: resolveUrl(best, baseUrl), source: 'img-tag', product };
+
+  return { url: null, source: 'none', product };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TEXT EXTRACTION — build a Claude-friendly context snippet
+// ────────────────────────────────────────────────────────────────────────────
+
+function buildTextContext(html, url, productJsonLd) {
+  const parts = [];
+  parts.push(`URL: ${url}`);
+
+  // Domain as brand hint
+  try {
+    const u = new URL(url);
+    parts.push(`Domain: ${u.hostname.replace(/^www\./, '')}`);
+  } catch (e) {}
+
+  // Page title
+  const title = getMeta(html, 'og:title') || getMeta(html, 'twitter:title') ||
+    (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || '');
+  if (title) parts.push(`Title: ${title}`);
+
+  // Meta description
+  const desc = getMeta(html, 'og:description') || getMeta(html, 'description');
+  if (desc) parts.push(`Description: ${desc}`);
+
+  // JSON-LD product facts (most accurate source)
+  if (productJsonLd) {
+    if (productJsonLd.name) parts.push(`Product name: ${productJsonLd.name}`);
+    const brand = typeof productJsonLd.brand === 'string'
+      ? productJsonLd.brand
+      : productJsonLd.brand?.name;
+    if (brand) parts.push(`Brand: ${brand}`);
+    const offers = productJsonLd.offers;
+    const price = Array.isArray(offers) ? offers[0]?.price : offers?.price;
+    if (price) parts.push(`Price: ${price} ${Array.isArray(offers) ? offers[0]?.priceCurrency : offers?.priceCurrency || 'USD'}`);
+    if (productJsonLd.color) parts.push(`Color (from product data): ${productJsonLd.color}`);
+    if (productJsonLd.material) parts.push(`Material: ${productJsonLd.material}`);
+  }
+
+  // Headings — h1 is often the product name
+  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  if (h1Match) {
+    const h1Text = h1Match[1].replace(/<[^>]+>/g, '').trim();
+    if (h1Text && h1Text.length < 200) parts.push(`H1: ${h1Text}`);
+  }
+
+  return parts.join('\n');
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// CLAUDE INFERENCE — structured field extraction
+// ────────────────────────────────────────────────────────────────────────────
+
+async function claudeInfer(context, apiKey) {
+  const prompt = `You are extracting clothing-item details from a retail product page. The relevant scraped context is below. Infer the best values. Return ONLY a valid JSON object (no markdown, no prose) with these exact keys:
+
+{
+  "name": "Short product name, 2-5 words (e.g. 'Pace Breaker Jogger', 'Silk Slip Dress'). Strip model numbers and size suffixes. If unsure, use page title main segment.",
+  "brand": "Brand name (e.g. 'Lululemon', 'Zara', 'Toteme'). Infer from domain or page content.",
+  "category": "EXACTLY one of: Tops | Bottoms | Dresses | Outerwear | Shoes | Accessories. Infer from product type.",
+  "color": "Hex color code for the dominant/listed color (e.g. '#1A1A1A' for black, '#3A5F3A' for green). If unknown, use '#2A2A2A'.",
+  "price": 0,
+  "condition": "Like New",
+  "tags": []
+}
+
+Pricing: price must be a NUMBER in USD without currency symbols. 0 if unknown.
+Tags: 2-4 lowercase descriptive tags like ["athletic","jogger"] or ["formal","silk"].
+
+Context:
+${context}
+
+Return ONLY the JSON object, nothing else.`;
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 500,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    throw new Error(`Claude API ${res.status}: ${errBody.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const text = data?.content?.[0]?.text || '';
+  const cleaned = text.replace(/```json\s*|\s*```/g, '').trim();
+  return JSON.parse(cleaned);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// MAIN HANDLER
+// ────────────────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -174,11 +272,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'url is required' });
   }
 
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  }
+
   try {
-    // Fetch the page HTML
+    // ── Fetch the retailer page ──
     const pageRes = await fetch(url, {
       headers: {
-        // Pretend to be a normal browser — many sites 403 bot-ish UAs
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -192,93 +294,44 @@ export default async function handler(req, res) {
 
     const html = await pageRes.text();
 
-    // ── Image extraction (priority order) ──
-    let imageUrl = null;
-    let imageSource = 'none';
+    // ── Image (deterministic) ──
+    const { url: imageUrl, source: imageSource, product: productJsonLd } = extractBestImage(html, url);
 
-    // 1. JSON-LD structured data
-    const jsonLd = extractJsonLd(html);
-    const product = findProduct(jsonLd);
-    if (product) {
-      const imgField = product.image;
-      let productImages = [];
-      if (typeof imgField === 'string') productImages = [imgField];
-      else if (Array.isArray(imgField)) productImages = imgField.filter(x => typeof x === 'string');
-      else if (imgField && imgField.url) productImages = [imgField.url];
-      // Score each and pick the best
-      const best = pickBestImage(productImages.map(u => ({ url: u })));
-      if (best) { imageUrl = best; imageSource = 'json-ld'; }
+    // ── Text context for Claude ──
+    const context = buildTextContext(html, url, productJsonLd);
+
+    // ── Claude-powered field inference ──
+    let fields;
+    try {
+      fields = await claudeInfer(context, apiKey);
+    } catch (e) {
+      console.error('[scrape-product] Claude inference failed:', e.message);
+      // Fallback: use raw JSON-LD values if Claude fails
+      fields = {
+        name: productJsonLd?.name || '',
+        brand: (typeof productJsonLd?.brand === 'string' ? productJsonLd.brand : productJsonLd?.brand?.name) || '',
+        category: null,
+        color: '#2A2A2A',
+        price: parseFloat((Array.isArray(productJsonLd?.offers) ? productJsonLd.offers[0]?.price : productJsonLd?.offers?.price) || 0) || 0,
+        condition: 'Like New',
+        tags: [],
+      };
     }
 
-    // 2. Open Graph image
-    if (!imageUrl) {
-      const og = getMeta(html, 'og:image');
-      if (og && !isLikelySwatch(og)) { imageUrl = og; imageSource = 'og:image'; }
-    }
-
-    // 3. Twitter image
-    if (!imageUrl) {
-      const twitter = getMeta(html, 'twitter:image');
-      if (twitter && !isLikelySwatch(twitter)) { imageUrl = twitter; imageSource = 'twitter:image'; }
-    }
-
-    // 4. Fallback: best <img> tag on the page
-    if (!imageUrl) {
-      const candidates = extractImgCandidates(html);
-      const best = pickBestImage(candidates);
-      if (best) { imageUrl = best; imageSource = 'img-tag'; }
-    }
-
-    // Resolve relative URLs
-    if (imageUrl) imageUrl = resolveUrl(imageUrl, url);
-
-    // ── Text extraction ──
-    const title = getMeta(html, 'og:title') || getMeta(html, 'twitter:title') ||
-      (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || '');
-    const description = getMeta(html, 'og:description') || getMeta(html, 'description') || '';
-
-    // Product-level fields from JSON-LD if available
-    let name = '', brand = '', price = 0;
-    if (product) {
-      name = product.name || '';
-      brand = (typeof product.brand === 'string' ? product.brand : product.brand?.name) || '';
-      const offers = product.offers;
-      if (offers) {
-        const offerPrice = Array.isArray(offers) ? offers[0]?.price : offers.price;
-        if (offerPrice) price = parseFloat(offerPrice) || 0;
-      }
-    }
-
-    // Fallback: domain → brand
-    if (!brand) {
-      try {
-        const u = new URL(url);
-        brand = u.hostname.replace(/^www\./, '').replace(/\.(com|net|org|co.*)$/, '');
-        brand = brand.charAt(0).toUpperCase() + brand.slice(1);
-      } catch (e) {}
-    }
-
-    // Fallback: title → name
-    if (!name && title) {
-      // Strip common "| BrandName" suffixes
-      name = title.split(/[|—–-]/)[0].trim();
-    }
-
-    // Use Claude via the existing /api/claude proxy if we need to guess category
-    // Simpler: let the frontend's fallback handle category — we just return what we have.
-
-    return res.status(200).json({
-      name: name || '',
-      brand: brand || '',
-      price,
+    // ── Sanitize + respond ──
+    const response = {
+      name: fields.name || '',
+      brand: fields.brand || '',
+      category: fields.category || null,
+      color: fields.color || '#2A2A2A',
+      price: typeof fields.price === 'number' ? fields.price : (parseFloat(fields.price) || 0),
+      condition: fields.condition || 'Like New',
+      tags: Array.isArray(fields.tags) ? fields.tags.slice(0, 5) : [],
       image: imageUrl || null,
-      imageSource,              // debug — lets frontend know which strategy worked
-      description,
-      category: null,           // frontend/Claude will infer
-      color: '#2A2A2A',
-      condition: 'Like New',
-      tags: [],
-    });
+      imageSource,
+    };
+
+    return res.status(200).json(response);
 
   } catch (err) {
     console.error('[scrape-product] error:', err);
