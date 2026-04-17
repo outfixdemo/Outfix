@@ -1,262 +1,287 @@
+// /api/scrape-product.js
+// Extracts product info from a retail URL and returns normalized JSON
+// for the add-item flow. Image extraction is prioritized to prefer
+// real product photos over color swatches or thumbnails.
+//
+// Strategy (in order):
+//   1. JSON-LD structured data (schema.org/Product) — most accurate
+//   2. <meta property="og:image"> — Open Graph
+//   3. <meta name="twitter:image">
+//   4. First large <img> with "product/hero/main" keywords
+//   5. Largest srcset variant from a <picture>/<img>
+//
+// Every candidate is validated against a blocklist of keywords that
+// typically indicate a swatch, thumbnail, or non-product asset.
+
+export const config = {
+  api: {
+    bodyParser: { sizeLimit: '1mb' },
+  },
+};
+
+// URL fragments that usually signal a BAD image (swatch, thumbnail, icon, etc.)
+const BAD_IMAGE_PATTERNS = [
+  /swatch/i,
+  /color[-_ ]?picker/i,
+  /thumbnail/i,
+  /\bthumb\b/i,
+  /sprite/i,
+  /icon/i,
+  /logo/i,
+  /placeholder/i,
+  /blank/i,
+  /spacer/i,
+  /1x1/i,
+  /pixel/i,
+];
+
+// URL fragments that usually signal a GOOD product image
+const GOOD_IMAGE_PATTERNS = [
+  /product/i,
+  /\bhero\b/i,
+  /\bmain\b/i,
+  /primary/i,
+  /front/i,
+  /detail/i,
+  /large/i,
+  /\bfull\b/i,
+];
+
+function isLikelySwatch(url) {
+  if (!url || typeof url !== 'string') return true;
+  // Obvious swatch indicators
+  return BAD_IMAGE_PATTERNS.some(p => p.test(url));
+}
+
+function scoreImageUrl(url) {
+  if (!url) return -100;
+  let score = 0;
+  // Reject swatches
+  if (isLikelySwatch(url)) return -50;
+  // Prefer known-good patterns
+  for (const p of GOOD_IMAGE_PATTERNS) if (p.test(url)) score += 10;
+  // Prefer larger width params if present (e.g., ?w=1200, _1200x, -1200.jpg)
+  const widthMatch = url.match(/[?&](w|width)=(\d+)|_(\d+)x|[-_](\d{3,4})\.(?:jpg|jpeg|png|webp)/i);
+  if (widthMatch) {
+    const width = parseInt(widthMatch[2] || widthMatch[3] || widthMatch[4] || '0', 10);
+    if (width >= 800) score += 20;
+    else if (width >= 400) score += 10;
+    else if (width < 200) score -= 20;
+  }
+  // Prefer HTTPS
+  if (url.startsWith('https://')) score += 2;
+  // Prefer non-data URLs (data URLs in HTML are usually placeholders)
+  if (url.startsWith('data:')) score -= 30;
+  return score;
+}
+
+// Extract all JSON-LD blocks from HTML
+function extractJsonLd(html) {
+  const blocks = [];
+  const regex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      // Sometimes JSON-LD is wrapped in a @graph array
+      if (Array.isArray(parsed)) blocks.push(...parsed);
+      else if (parsed['@graph']) blocks.push(...parsed['@graph']);
+      else blocks.push(parsed);
+    } catch (e) { /* malformed JSON — skip */ }
+  }
+  return blocks;
+}
+
+// Find a Product entity in JSON-LD
+function findProduct(jsonLdBlocks) {
+  for (const b of jsonLdBlocks) {
+    const type = b['@type'];
+    if (type === 'Product' || (Array.isArray(type) && type.includes('Product'))) return b;
+  }
+  return null;
+}
+
+// Get a clean meta tag value
+function getMeta(html, property) {
+  const patterns = [
+    new RegExp(`<meta[^>]*property=["']${property}["'][^>]*content=["']([^"']+)["']`, 'i'),
+    new RegExp(`<meta[^>]*content=["']([^"']+)["'][^>]*property=["']${property}["']`, 'i'),
+    new RegExp(`<meta[^>]*name=["']${property}["'][^>]*content=["']([^"']+)["']`, 'i'),
+    new RegExp(`<meta[^>]*content=["']([^"']+)["'][^>]*name=["']${property}["']`, 'i'),
+  ];
+  for (const p of patterns) {
+    const m = html.match(p);
+    if (m && m[1]) return m[1].trim();
+  }
+  return null;
+}
+
+// Extract candidate images from <img> and srcset
+function extractImgCandidates(html) {
+  const imgs = [];
+  const imgRegex = /<img[^>]+>/gi;
+  let match;
+  while ((match = imgRegex.exec(html)) !== null) {
+    const tag = match[0];
+    const srcMatch = tag.match(/\bsrc=["']([^"']+)["']/i);
+    const srcsetMatch = tag.match(/\bsrcset=["']([^"']+)["']/i);
+    const altMatch = tag.match(/\balt=["']([^"']+)["']/i);
+    const classMatch = tag.match(/\bclass=["']([^"']+)["']/i);
+    if (srcMatch) imgs.push({ url: srcMatch[1], alt: altMatch?.[1] || '', className: classMatch?.[1] || '' });
+    if (srcsetMatch) {
+      // Parse srcset: "url1 300w, url2 600w, url3 1200w" → pick largest
+      const candidates = srcsetMatch[1].split(',').map(s => {
+        const parts = s.trim().split(/\s+/);
+        return { url: parts[0], width: parseInt(parts[1] || '0', 10) };
+      });
+      candidates.sort((a, b) => b.width - a.width);
+      if (candidates[0]) imgs.push({ url: candidates[0].url, alt: altMatch?.[1] || '', className: classMatch?.[1] || '' });
+    }
+  }
+  return imgs;
+}
+
+// Pick the best image from all candidates
+function pickBestImage(candidates) {
+  if (!candidates.length) return null;
+  const scored = candidates.map(c => ({ ...c, score: scoreImageUrl(c.url) }));
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  return best.score > -30 ? best.url : null;
+}
+
+// Resolve relative URL against the base URL
+function resolveUrl(src, baseUrl) {
+  if (!src) return null;
+  if (src.startsWith('//')) return 'https:' + src;
+  if (src.startsWith('/')) {
+    try {
+      const u = new URL(baseUrl);
+      return `${u.protocol}//${u.host}${src}`;
+    } catch (e) { return src; }
+  }
+  if (src.startsWith('http')) return src;
+  try { return new URL(src, baseUrl).toString(); } catch (e) { return src; }
+}
+
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: 'url required' });
-
-  const firecrawlKey = process.env.FIRECRAWL_API_KEY;
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-
-  // ── HELPERS ──────────────────────────────────────────────────────────────────
-
-  // Parse JSON-LD product schema from raw HTML
-  const parseJsonLd = (html) => {
-    const results = [];
-    const breadcrumbs = [];
-    const re = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-    let m;
-    while ((m = re.exec(html)) !== null) {
-      try {
-        const obj = JSON.parse(m[1].trim());
-        const items = Array.isArray(obj) ? obj : [obj];
-        for (const item of items) {
-          if (item['@type'] === 'Product' || item['@type']?.includes?.('Product')) {
-            results.push(item);
-          }
-          // Some sites nest Product inside @graph
-          if (item['@graph']) {
-            for (const g of item['@graph']) {
-              if (g['@type'] === 'Product') results.push(g);
-              // Breadcrumbs in @graph
-              if (g['@type'] === 'BreadcrumbList' && g.itemListElement) {
-                breadcrumbs.push(...g.itemListElement.map(i => i.name || ''));
-              }
-            }
-          }
-          // Top-level BreadcrumbList (e.g. Foot Locker: Men's / Shoes / Casual Sneakers)
-          if (item['@type'] === 'BreadcrumbList' && item.itemListElement) {
-            breadcrumbs.push(...item.itemListElement.map(i => i.name || ''));
-          }
-        }
-      } catch (e) {}
-    }
-    const product = results[0] || null;
-    // Attach breadcrumb category hint to product if found
-    if (product && breadcrumbs.length) product._breadcrumbs = breadcrumbs;
-    if (!product && breadcrumbs.length) return { _breadcrumbs: breadcrumbs };
-    return product;
-  };
-
-  // Parse Open Graph tags from HTML
-  const parseOG = (html) => {
-    const get = (prop) => {
-      const m = html.match(new RegExp(`<meta[^>]+property=["']og:${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
-               || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, 'i'));
-      return m?.[1] || null;
-    };
-    return { title: get('title'), image: get('image'), description: get('description'), price: get('price:amount') };
-  };
-
-  // Extract color hex from product data
-  const colorNameToHex = (name = '') => {
-    const map = {
-      black:'#1A1A1A', white:'#F5F5F5', grey:'#888888', gray:'#888888',
-      navy:'#1B2A4A', blue:'#3A6EA5', red:'#C0392B', green:'#27AE60',
-      brown:'#6B3F2A', tan:'#C4A882', camel:'#C19A6B', cream:'#FFFDD0',
-      beige:'#D4B896', khaki:'#BDB76B', olive:'#808000', pink:'#FFB6C1',
-      burgundy:'#800020', wine:'#722F37', yellow:'#F1C40F', orange:'#E67E22',
-      purple:'#8E44AD', lavender:'#B57EDC', teal:'#008080', mint:'#98FF98',
-      coral:'#FF6B6B', ivory:'#FFFFF0', stone:'#8A7968', sand:'#C2B280',
-    };
-    const lower = name.toLowerCase();
-    for (const [key, hex] of Object.entries(map)) {
-      if (lower.includes(key)) return hex;
-    }
-    return '#2A2A2A';
-  };
-
-  // Map product category string to Outfix categories
-  const mapCategory = (str = '') => {
-    const s = str.toLowerCase();
-    if (/dress|skirt|jumpsuit|romper/.test(s)) return 'Dresses';
-    if (/jacket|coat|blazer|parka|puffer|windbreaker|hoodie|sweater|knitwear|cardigan/.test(s)) return 'Outerwear';
-    if (/shoe|sneaker|boot|loafer|heel|sandal|trainer|runner|footwear|kicks|court shoe|athletic shoe/.test(s)) return 'Shoes';
-    if (/pant|jeans?|denim|trouser|chino|short|legging|bottom|jogger|cargo/.test(s)) return 'Bottoms';
-    if (/bag|wallet|belt|hat|scarf|glove|jewel|watch|accessor|sunglasses|eyewear|glasses|spectacle|optical|sunglass/.test(s)) return 'Accessories';
-    return null; // no match — user must select
-  };
-
-  // Merge partial result with defaults
-  const buildResult = (data, source) => ({
-    name: data.name || '',
-    brand: data.brand || '',
-    price: parseFloat(String(data.price).replace(/[^0-9.]/g, '')) || 0,
-    color: data.color || '#2A2A2A',
-    category: data.category || null,
-    image: data.image || null,
-    condition: 'Like New',
-    tags: data.tags || [],
-    source,
-  });
-
-  // ── TIER 1: Raw HTML + JSON-LD ───────────────────────────────────────────────
-  let result = null;
+  const { url } = req.body || {};
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'url is required' });
+  }
 
   try {
-    const htmlRes = await fetch(url, {
+    // Fetch the page HTML
+    const pageRes = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        // Pretend to be a normal browser — many sites 403 bot-ish UAs
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Language': 'en-US,en;q=0.9',
       },
-      signal: AbortSignal.timeout(8000),
+      redirect: 'follow',
     });
 
-    if (htmlRes.ok) {
-      const html = await htmlRes.text();
-      const product = parseJsonLd(html);
-      const og = parseOG(html);
+    if (!pageRes.ok) {
+      return res.status(502).json({ error: `Page fetch failed: ${pageRes.status}` });
+    }
 
-      if (product) {
-        // Extract price from offers — handle string prices, nested offers, OG fallback
-        const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
-        const rawPrice = offer?.price ?? offer?.lowPrice ?? offer?.highPrice ?? product.price ?? og.price ?? 0;
-        const price = parseFloat(String(rawPrice).replace(/[^0-9.]/g, '')) || 0;
+    const html = await pageRes.text();
 
-        // Extract image — prefer array first image, then string
-        const imgRaw = Array.isArray(product.image) ? product.image[0] : product.image;
-        const image = (typeof imgRaw === 'string' ? imgRaw : imgRaw?.url) || og.image || null;
+    // ── Image extraction (priority order) ──
+    let imageUrl = null;
+    let imageSource = 'none';
 
-        // Extract color
-        const colorStr = product.color || '';
-        const color = colorStr.startsWith('#') ? colorStr : colorNameToHex(colorStr);
+    // 1. JSON-LD structured data
+    const jsonLd = extractJsonLd(html);
+    const product = findProduct(jsonLd);
+    if (product) {
+      const imgField = product.image;
+      let productImages = [];
+      if (typeof imgField === 'string') productImages = [imgField];
+      else if (Array.isArray(imgField)) productImages = imgField.filter(x => typeof x === 'string');
+      else if (imgField && imgField.url) productImages = [imgField.url];
+      // Score each and pick the best
+      const best = pickBestImage(productImages.map(u => ({ url: u })));
+      if (best) { imageUrl = best; imageSource = 'json-ld'; }
+    }
 
-        // Extract brand
-        const brand = (typeof product.brand === 'string' ? product.brand : product.brand?.name) || '';
+    // 2. Open Graph image
+    if (!imageUrl) {
+      const og = getMeta(html, 'og:image');
+      if (og && !isLikelySwatch(og)) { imageUrl = og; imageSource = 'og:image'; }
+    }
 
-        // Extract category — breadcrumbs > name > JSON-LD category field
-        const nameBasedCat = mapCategory(product.name || '');
-        const catRaw = product.category || product.itemCondition || '';
-        // Breadcrumbs are the most reliable signal: "Men's / Shoes / Casual Sneakers" → Shoes
-        const breadcrumbCat = (product._breadcrumbs || [])
-          .map(b => mapCategory(b))
-          .find(c => c !== null) || null;
-        const category = breadcrumbCat || (nameBasedCat || mapCategory(catRaw) || null);
+    // 3. Twitter image
+    if (!imageUrl) {
+      const twitter = getMeta(html, 'twitter:image');
+      if (twitter && !isLikelySwatch(twitter)) { imageUrl = twitter; imageSource = 'twitter:image'; }
+    }
 
-        const isComplete = product.name && brand && price > 0 && image;
+    // 4. Fallback: best <img> tag on the page
+    if (!imageUrl) {
+      const candidates = extractImgCandidates(html);
+      const best = pickBestImage(candidates);
+      if (best) { imageUrl = best; imageSource = 'img-tag'; }
+    }
 
-        result = buildResult({ name: product.name, brand, price, color, category, image }, 'jsonld');
+    // Resolve relative URLs
+    if (imageUrl) imageUrl = resolveUrl(imageUrl, url);
 
-        if (isComplete) {
-          return res.status(200).json(result);
-        }
-        // Partial — continue to Tier 2 to fill gaps
+    // ── Text extraction ──
+    const title = getMeta(html, 'og:title') || getMeta(html, 'twitter:title') ||
+      (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || '');
+    const description = getMeta(html, 'og:description') || getMeta(html, 'description') || '';
+
+    // Product-level fields from JSON-LD if available
+    let name = '', brand = '', price = 0;
+    if (product) {
+      name = product.name || '';
+      brand = (typeof product.brand === 'string' ? product.brand : product.brand?.name) || '';
+      const offers = product.offers;
+      if (offers) {
+        const offerPrice = Array.isArray(offers) ? offers[0]?.price : offers.price;
+        if (offerPrice) price = parseFloat(offerPrice) || 0;
       }
     }
-  } catch (e) {
-    console.log('Tier 1 failed:', e.message);
-  }
 
-  // ── TIER 2: Firecrawl (JS-rendered pages) ───────────────────────────────────
-  if (firecrawlKey) {
-    try {
-      const fcRes = await fetch('https://api.firecrawl.dev/v1/scrape', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${firecrawlKey}`,
-        },
-        body: JSON.stringify({
-          url,
-          formats: ['extract'],
-          extract: {
-            schema: {
-              type: 'object',
-              properties: {
-                name:     { type: 'string', description: 'Full product name' },
-                brand:    { type: 'string', description: 'Brand name' },
-                price:    { type: 'number', description: 'Current price as a number' },
-                color:    { type: 'string', description: 'Product color' },
-                category: { type: 'string', description: 'Product category' },
-                image:    { type: 'string', description: 'Primary product image URL' },
-              },
-            },
-          },
-        }),
-        signal: AbortSignal.timeout(15000),
-      });
-
-      if (fcRes.ok) {
-        const fcData = await fcRes.json();
-        const ext = fcData?.data?.extract;
-        if (ext?.name) {
-          const merged = {
-            name:     ext.name     || result?.name     || '',
-            brand:    ext.brand    || result?.brand    || '',
-            price:    ext.price    || result?.price    || 0,
-            color:    ext.color    ? colorNameToHex(ext.color) : (result?.color || '#2A2A2A'),
-            category: ext.category ? mapCategory(ext.category) : (result?.category || null),
-            image:    ext.image    || result?.image    || null,
-          };
-          result = buildResult(merged, 'firecrawl');
-
-          const isComplete = merged.name && merged.brand && merged.price > 0 && merged.image;
-          if (isComplete) return res.status(200).json(result);
-        }
-      }
-    } catch (e) {
-      console.log('Tier 2 failed:', e.message);
+    // Fallback: domain → brand
+    if (!brand) {
+      try {
+        const u = new URL(url);
+        brand = u.hostname.replace(/^www\./, '').replace(/\.(com|net|org|co.*)$/, '');
+        brand = brand.charAt(0).toUpperCase() + brand.slice(1);
+      } catch (e) {}
     }
-  }
 
-  // ── TIER 3: Claude fills gaps from URL slug ──────────────────────────────────
-  if (anthropicKey) {
-    try {
-      const urlObj = new URL(url);
-      const slug = urlObj.pathname.split('/').filter(Boolean).join(' ').replace(/-/g, ' ');
-      const domain = urlObj.hostname.replace('www.', '').replace('.com', '').replace('.co', '');
-
-      const partial = result ? `Partial data already found: ${JSON.stringify(result)}. Fill in any missing or zero fields.` : '';
-
-      const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': anthropicKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 512,
-          messages: [{
-            role: 'user',
-            content: `A user is adding a clothing item to their wardrobe app. URL: "${url}" Domain: ${domain} URL path: "${slug}" ${partial}\n\nUsing your knowledge of this brand and the URL, return ONLY valid JSON:\n{"name":"full product name","brand":"brand name","price":0,"color":"#hexcode","category":"Tops|Bottoms|Dresses|Outerwear|Shoes|Accessories","image":null,"tags":["tag1","tag2"]}`,
-          }],
-        }),
-        signal: AbortSignal.timeout(10000),
-      });
-
-      if (claudeRes.ok) {
-        const claudeData = await claudeRes.json();
-        const text = claudeData.content?.[0]?.text || '';
-        const json = JSON.parse(text.replace(/```json|```/g, '').trim());
-        const merged = {
-          name:     json.name     || result?.name     || '',
-          brand:    json.brand    || result?.brand    || '',
-          price:    json.price    || result?.price    || 0,
-          color:    json.color    || result?.color    || '#2A2A2A',
-          category: json.category || result?.category || null,
-          image:    json.image    || result?.image    || null,
-          tags:     json.tags     || [],
-        };
-        return res.status(200).json(buildResult(merged, 'claude'));
-      }
-    } catch (e) {
-      console.log('Tier 3 failed:', e.message);
+    // Fallback: title → name
+    if (!name && title) {
+      // Strip common "| BrandName" suffixes
+      name = title.split(/[|—–-]/)[0].trim();
     }
-  }
 
-  // ── FALLBACK: return whatever we have ────────────────────────────────────────
-  if (result) return res.status(200).json(result);
-  return res.status(422).json({ error: 'Could not extract product data from URL' });
+    // Use Claude via the existing /api/claude proxy if we need to guess category
+    // Simpler: let the frontend's fallback handle category — we just return what we have.
+
+    return res.status(200).json({
+      name: name || '',
+      brand: brand || '',
+      price,
+      image: imageUrl || null,
+      imageSource,              // debug — lets frontend know which strategy worked
+      description,
+      category: null,           // frontend/Claude will infer
+      color: '#2A2A2A',
+      condition: 'Like New',
+      tags: [],
+    });
+
+  } catch (err) {
+    console.error('[scrape-product] error:', err);
+    return res.status(500).json({ error: err.message || 'Scrape failed' });
+  }
 }
