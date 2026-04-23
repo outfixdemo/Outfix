@@ -1,3 +1,8 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// /api/claude.js — Outfix Claude API proxy
+// Updated April 22 2026 to use Sonnet 4.5 (active, replaces deprecated Sonnet 4)
+// ═══════════════════════════════════════════════════════════════════════════
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -37,8 +42,17 @@ export default async function handler(req, res) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
+        // ── MODEL UPDATE ──────────────────────────────────────────────────
+        // Old: 'claude-sonnet-4-20250514' (deprecated April 14 2026, retires June 15 2026)
+        // New: 'claude-sonnet-4-5-20250929' — Anthropic's official migration path.
+        //   Active, same $3/$15 per M-token pricing, proven for structured JSON output.
+        //   Avoids Sonnet 4.6's default high-effort latency hit (bad for short outfit JSON).
+        model: 'claude-sonnet-4-5-20250929',
+
+        // Bumped from 1024 — gives headroom for longer outfit JSON / analysis responses.
+        // Sonnet 4.5 supports up to 64K output tokens; 2048 is plenty for Outfix use case.
+        max_tokens: 2048,
+
         system: systemPrompt || 'You are a helpful fashion AI assistant. Always respond concisely and accurately.',
         messages: [{ role: 'user', content }],
       }),
